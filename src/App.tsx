@@ -355,8 +355,7 @@ const App: React.FC = () => {
                 <div className="flex flex-col">
                     <span className={`font-bold text-sm tracking-widest ${theme.mutedText}`}>DEVELOPER ID</span>
                     <a href="https://x.com/mixon_here" target="_blank" className={`font-bold text-xl hover:underline ${isDarkMode ? 'text-green-400' : 'text-[#000080]'}`}>@mixon_here</a>
-                    <span className="text-xs uppercase opacity-70">5 Clicks for SysAdmin</span>
-                </div>
+                    </div>
             </div>
 
             {/* Status */}
@@ -534,5 +533,6 @@ const App: React.FC = () => {
     </div>
   );
 };
+
 
 export default App;
