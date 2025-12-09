@@ -85,8 +85,7 @@ const App: React.FC = () => {
   
   // Settings
   const [twitterUrl, setTwitterUrl] = useState<string>('');
-  // HARDCODED NGROK URL FOR PRODUCTION
-  const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
+  const [serverUrl, setServerUrl] = useState<string>('wss://YOUR_NGROK_URL.ngrok-free.app/ws');
   
   // Voice
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -452,16 +451,11 @@ const App: React.FC = () => {
                )}
 
                {transcriptions.map((item, index) => {
-                   // Calculate separator using previous item logic
-                   const prevItem = index > 0 ? transcriptions[index - 1] : null;
-                   const isHistoryBreak = prevItem && (item.timestamp.getTime() - prevItem.timestamp.getTime() > 6000000); // just a fallback, usually handled by server event
-                   
+                   // Show separator if this is the start of live messages (assuming history comes first)
+                   // Simple heuristic: if previous timestamp is much older, or if we have a flag. 
+                   // For now, let's just render them.
                    return (
                    <div key={item.id} className="mb-6 group">
-                        {/* History Separator Logic could be refined, but server sends bulk history. 
-                            Let's add a visual cue if this message is history (older than connection time). 
-                            Actually, simpler: History items come first. */}
-                        
                         <div className={`flex items-baseline gap-2 mb-1 text-sm border-b ${isDarkMode ? 'border-green-800 text-green-700' : 'border-gray-300 text-blue-800'}`}>
                             <span className="font-bold font-mono">
                                 [{item.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}]
