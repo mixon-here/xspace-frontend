@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Terminal, X as XIcon, ArrowDown, Sun, Moon, Volume2, VolumeX } from 'lucide-react';
 import { ConnectionState, TranscriptionItem, Language } from './types';
