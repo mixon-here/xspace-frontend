@@ -5,7 +5,12 @@ export interface TranscriptionItem {
   timestamp: Date;
 }
 
-export type ConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
+export enum ConnectionState {
+  DISCONNECTED = 'DISCONNECTED',
+  CONNECTING = 'CONNECTING',
+  CONNECTED = 'CONNECTED',
+  ERROR = 'ERROR',
+}
 
 export interface Language {
   code: string;

@@ -79,14 +79,13 @@ const RetroSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { is
 
 const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('DISCONNECTED');
+  const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [transcriptions, setTranscriptions] = useState<TranscriptionItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
   // Settings
   const [twitterUrl, setTwitterUrl] = useState<string>('');
-  // HARDCODED NGROK URL FOR PRODUCTION
-  const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
+  const [serverUrl, setServerUrl] = useState<string>('wss://YOUR_NGROK_URL.ngrok-free.app/ws');
   
   // Voice
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -221,7 +220,7 @@ const App: React.FC = () => {
     if (serverUrl.includes("YOUR_NGROK_URL")) { setError("Server not configured."); return; }
 
     clearQueueAndStopSpeech();
-    setConnectionState('CONNECTING');
+    setConnectionState(ConnectionState.CONNECTING);
     setError(null);
     setTranscriptions([]);
 
@@ -230,7 +229,7 @@ const App: React.FC = () => {
       websocketRef.current = ws;
 
       ws.onopen = () => {
-        setConnectionState('CONNECTED');
+        setConnectionState(ConnectionState.CONNECTED);
         ws.send(JSON.stringify({
             url: twitterUrl,
             source_language: sourceLanguage.name,
@@ -276,27 +275,27 @@ const App: React.FC = () => {
 
       ws.onerror = () => {
         setError("Connection Failed. Check Server.");
-        setConnectionState('ERROR');
+        setConnectionState(ConnectionState.ERROR);
       };
 
       ws.onclose = () => {
-        if (connectionState === 'CONNECTED') setConnectionState('DISCONNECTED');
+        if (connectionState === ConnectionState.CONNECTED) setConnectionState(ConnectionState.DISCONNECTED);
       };
 
     } catch (netErr: any) {
       setError(netErr.message);
-      setConnectionState('DISCONNECTED');
+      setConnectionState(ConnectionState.DISCONNECTED);
     }
   };
 
   const stopSession = () => {
     if (websocketRef.current) { websocketRef.current.close(); websocketRef.current = null; }
     clearQueueAndStopSpeech();
-    setConnectionState('DISCONNECTED');
+    setConnectionState(ConnectionState.DISCONNECTED);
   };
 
   const toggleSession = () => {
-    if (connectionState === 'CONNECTED' || connectionState === 'CONNECTING') stopSession();
+    if (connectionState === ConnectionState.CONNECTED || connectionState === ConnectionState.CONNECTING) stopSession();
     else connectToBackend();
   };
 
@@ -351,9 +350,9 @@ const App: React.FC = () => {
             <fieldset className={`border-2 p-2 pt-1 mt-2 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
                 <legend className={`px-1 ml-2 text-sm ${theme.text}`}>System Status</legend>
                 <div className="flex items-center gap-3">
-                    <div className={`w-4 h-4 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
+                    <div className={`w-4 h-4 border border-black ${connectionState === ConnectionState.CONNECTED ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
                     <span className={`uppercase tracking-widest ${theme.text}`}>
-                        {connectionState === 'CONNECTED' ? 'RECEIVING STREAM' : 'DISCONNECTED'}
+                        {connectionState === ConnectionState.CONNECTED ? 'RECEIVING STREAM' : 'DISCONNECTED'}
                     </span>
                 </div>
             </fieldset>
@@ -367,7 +366,7 @@ const App: React.FC = () => {
                         value={twitterUrl}
                         onChange={(e) => setTwitterUrl(e.target.value)}
                         placeholder="https://x.com/..."
-                        disabled={connectionState === 'CONNECTED'}
+                        disabled={connectionState === ConnectionState.CONNECTED}
                     />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -377,7 +376,7 @@ const App: React.FC = () => {
                             isDark={isDarkMode}
                             value={sourceLanguage.code}
                             onChange={(e) => setSourceLanguage(LANGUAGES.find(l => l.code === e.target.value) || LANGUAGES[0])}
-                            disabled={connectionState === 'CONNECTED'}
+                            disabled={connectionState === ConnectionState.CONNECTED}
                         >
                             {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                         </RetroSelect>
@@ -388,7 +387,7 @@ const App: React.FC = () => {
                             isDark={isDarkMode}
                             value={targetLanguage.code}
                             onChange={(e) => setTargetLanguage(LANGUAGES.find(l => l.code === e.target.value) || LANGUAGES[0])}
-                            disabled={connectionState === 'CONNECTED'}
+                            disabled={connectionState === ConnectionState.CONNECTED}
                         >
                             {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
                         </RetroSelect>
@@ -425,7 +424,7 @@ const App: React.FC = () => {
                 className="w-full py-3 font-bold text-xl uppercase tracking-widest"
                 onClick={toggleSession}
             >
-                {connectionState === 'CONNECTED' ? "Terminate Link" : "Establish Link"}
+                {connectionState === ConnectionState.CONNECTED ? "Terminate Link" : "Establish Link"}
             </RetroButton>
 
              {error && (
@@ -452,6 +451,9 @@ const App: React.FC = () => {
                )}
 
                {transcriptions.map((item, index) => {
+                   // Show separator if this is the start of live messages (assuming history comes first)
+                   // Simple heuristic: if previous timestamp is much older, or if we have a flag. 
+                   // For now, let's just render them.
                    return (
                    <div key={item.id} className="mb-6 group">
                         <div className={`flex items-baseline gap-2 mb-1 text-sm border-b ${isDarkMode ? 'border-green-800 text-green-700' : 'border-gray-300 text-blue-800'}`}>
