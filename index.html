@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>XSpace Translator 98</title>
+    <!-- Tailwind CDN is kept for simplicity in this specific setup, 
+         though in a pro setup we usually import it in CSS. 
+         This works perfectly fine for Vercel too. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+    <style>
+      /* Custom Scrollbar for Retro Look */
+      ::-webkit-scrollbar {
+        width: 16px;
+        background: #dfdfdf;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #c0c0c0;
+        border-top: 2px solid #fff;
+        border-left: 2px solid #fff;
+        border-right: 2px solid #000;
+        border-bottom: 2px solid #000;
+      }
+      ::-webkit-scrollbar-track {
+        background: repeating-linear-gradient(
+          45deg,
+          #c0c0c0,
+          #c0c0c0 2px,
+          #fff 2px,
+          #fff 4px
+        );
+      }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.32.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "vite": "https://aistudiocdn.com/vite@^7.2.7",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.2"
+  }
+}
+</script>
+</head>
+  <body class="bg-[#008080] text-black antialiased font-['VT323'] overflow-hidden">
+    <div id="root"></div>
+    <!-- This line is crucial for Vite to find your React code -->
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>
