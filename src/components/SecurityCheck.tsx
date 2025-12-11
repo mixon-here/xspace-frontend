@@ -14,8 +14,10 @@ const SecurityCheck: React.FC<SecurityCheckProps> = ({ onVerified, isDarkMode })
     const val = parseInt(e.target.value);
     setSliderValue(val);
     
-    if (val === 100) {
+    // Allow slight tolerance for mobile touch precision
+    if (val >= 98) {
       setIsUnlocking(true);
+      setSliderValue(100); // Snap visually to end
       setTimeout(() => {
         onVerified();
       }, 500);
@@ -60,7 +62,7 @@ const SecurityCheck: React.FC<SecurityCheckProps> = ({ onVerified, isDarkMode })
           </p>
 
           {/* Custom Slider */}
-          <div className="w-full relative h-12">
+          <div className="w-full relative h-14 select-none touch-none">
             <input
               type="range"
               min="0"
@@ -68,11 +70,12 @@ const SecurityCheck: React.FC<SecurityCheckProps> = ({ onVerified, isDarkMode })
               value={sliderValue}
               onChange={handleSliderChange}
               disabled={isUnlocking}
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20 touch-none appearance-none"
+              style={{ WebkitAppearance: 'none' }}
             />
             
             {/* Visual Track */}
-            <div className={`absolute inset-0 flex items-center px-1 ${theme.sliderTrack} ${isDarkMode ? 'border border-green-500' : 'border-2 border-inset border-white'}`}>
+            <div className={`absolute inset-0 top-1 bottom-1 flex items-center px-1 ${theme.sliderTrack} ${isDarkMode ? 'border border-green-500' : 'border-2 border-inset border-white'}`}>
                <span className={`w-full text-center font-bold tracking-widest pointer-events-none z-0 ${isDarkMode ? 'text-green-500/50' : 'text-white mix-blend-difference'}`}>
                  {isUnlocking ? "ACCESS GRANTED" : "SLIDE TO UNLOCK >>>"}
                </span>
@@ -80,7 +83,7 @@ const SecurityCheck: React.FC<SecurityCheckProps> = ({ onVerified, isDarkMode })
 
             {/* Visual Thumb */}
             <div 
-                className={`absolute top-1 bottom-1 w-12 flex items-center justify-center transition-all duration-75 z-10 pointer-events-none ${isDarkMode ? 'bg-green-500' : 'bg-[#c0c0c0] border-2 border-t-white border-l-white border-b-black border-r-black'}`}
+                className={`absolute top-2 bottom-2 w-12 flex items-center justify-center transition-all duration-75 z-10 pointer-events-none ${isDarkMode ? 'bg-green-500' : 'bg-[#c0c0c0] border-2 border-t-white border-l-white border-b-black border-r-black'}`}
                 style={{ left: `calc(${sliderValue}% - ${sliderValue * 0.48}px)` }} // simple math to keep thumb inside
             >
                 {isUnlocking ? <CheckCircle2 size={20} className={isDarkMode ? 'text-black' : 'text-green-600'} /> : <div className={`w-4 h-4 border-2 ${isDarkMode ? 'border-black' : 'border-black opacity-50'}`} />}
