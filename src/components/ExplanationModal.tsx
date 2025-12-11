@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Check, Zap, Volume2, Globe } from 'lucide-react';
+import { X, Check, Zap, Volume2, Globe, Radio } from 'lucide-react';
 
 interface ExplanationModalProps {
   isOpen: boolean;
@@ -57,28 +57,18 @@ const ExplanationModal: React.FC<ExplanationModalProps> = ({ isOpen, onClose, is
                         <span className="font-bold text-2xl">1</span>
                     </div>
                     <div>
-                        <h3 className="font-bold text-2xl mb-1">Paste Link</h3>
-                        <p className={theme.text}>Copy the Twitter Space URL and paste it into the "Target URL" field.</p>
+                        <h3 className="font-bold text-2xl mb-1">Select Language</h3>
+                        <p className={theme.text}>Choose your desired <b>Target Language</b> from the dropdown menu.</p>
                     </div>
                 </div>
 
                 <div className="flex items-start gap-4">
                     <div className={`p-2 shrink-0 ${theme.iconBg}`}>
-                        <span className="font-bold text-2xl">2</span>
+                        <Radio size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-2xl mb-1">Choose Language</h3>
-                        <p className={theme.text}>Select the language they are speaking (Input) and the language you want to read/hear (Output).</p>
-                    </div>
-                </div>
-
-                <div className="flex items-start gap-4">
-                    <div className={`p-2 shrink-0 ${theme.iconBg}`}>
-                        <Zap size={24} />
-                    </div>
-                    <div>
-                        <h3 className="font-bold text-2xl mb-1">Live Stream</h3>
-                        <p className={theme.text}>Click "ESTABLISH LINK". The system will connect to the broadcast.</p>
+                        <h3 className="font-bold text-2xl mb-1">Establish Link</h3>
+                        <p className={theme.text}>Click <b>"ESTABLISH LINK"</b> to connect to the broadcast server. Wait for the Admin to start the stream.</p>
                     </div>
                 </div>
 
@@ -87,9 +77,21 @@ const ExplanationModal: React.FC<ExplanationModalProps> = ({ isOpen, onClose, is
                         <Volume2 size={24} />
                     </div>
                     <div>
-                        <h3 className="font-bold text-2xl mb-1">Performance Tip</h3>
+                        <h3 className="font-bold text-2xl mb-1">Voice Quality</h3>
                         <p className={theme.text}>
-                            If your PC is slow, you can <b>MUTE</b> the audio playback in the sidebar. Text-only mode is extremely fast.
+                            For best results, select a <b>System Native Voice</b> (e.g., "Microsoft", "Google", "Apple") in the Audio Config. These sound much better than default web voices.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="flex items-start gap-4">
+                    <div className={`p-2 shrink-0 ${theme.iconBg}`}>
+                        <Zap size={24} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-2xl mb-1">Performance</h3>
+                        <p className={theme.text}>
+                            If your device slows down, you can <b>MUTE</b> the audio. Text-only mode is extremely lightweight.
                         </p>
                     </div>
                 </div>

@@ -12,9 +12,9 @@ const ServerSetup: React.FC<ServerSetupProps> = ({ onClose }) => {
     return `#!/bin/bash
 
 # ==========================================
-# XSPACE BROADCAST SERVER (v4.0 - LIGHTWEIGHT)
-# Architecture: Groq API Only (No Heavy Local Models)
-# Features: Admin Control, Multi-Language, Low CPU Usage
+# XSPACE BROADCAST SERVER (v4.7 - VERBOSE LOGS)
+# Architecture: Groq API Only
+# Features: Restart Loop + Full Logging
 # ==========================================
 
 echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
@@ -22,10 +22,13 @@ echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
 # 1. KILL PROCESSES
 pkill -f ngrok
 pkill -f xspace.py
+# Also kill any previous loop scripts if named start.sh running in background
+pkill -f "bash start.sh"
 
 # 2. SYSTEM DEPENDENCIES
+echo "Updating system..."
 sudo apt-get update -qq
-sudo apt-get install -y ffmpeg curl unzip -qq
+sudo apt-get install -y ffmpeg curl unzip build-essential -qq
 
 # 3. NGROK
 if ! command -v ngrok &> /dev/null; then
@@ -51,15 +54,23 @@ fi
 conda activate xspace
 
 # 6. LIBRARIES
+echo "Installing Python libraries..."
 pip uninstall google-genai google-generativeai -y -q
-pip install groq aiohttp fastapi uvicorn yt-dlp websockets
+pip install --default-timeout=100 --retries 5 -U groq aiohttp fastapi uvicorn yt-dlp websockets curl-cffi
 
 # 7. CONFIG
 echo ""
 echo -e "\\e[1;33m>>> SETUP \\e[0m"
-read -p "Enter GROQ_API_KEY: " GROQ_KEY
-read -p "Enter NGROK_AUTHTOKEN: " NGROK_TOKEN
-read -p "Ngrok Domain: " NGROK_DOMAIN
+if [ -z "$GROQ_KEY" ]; then
+    read -p "Enter GROQ_API_KEY: " GROQ_KEY
+fi
+if [ -z "$NGROK_TOKEN" ]; then
+    read -p "Enter NGROK_AUTHTOKEN: " NGROK_TOKEN
+fi
+# Restore Domain Input
+if [ -z "$NGROK_DOMAIN" ]; then
+    read -p "Enter NGROK_DOMAIN (optional, press Enter for random): " NGROK_DOMAIN
+fi
 
 ngrok config add-authtoken $NGROK_TOKEN
 
@@ -101,7 +112,6 @@ app.add_middleware(
 
 class ConnectionManager:
     def __init__(self):
-        # Store tuple: (websocket, target_language_name)
         self.active_connections: List[tuple[WebSocket, str]] = []
 
     async def connect(self, websocket: WebSocket, target_lang: str = "English"):
@@ -120,7 +130,6 @@ class ConnectionManager:
         disconnected = []
         for ws, lang in self.active_connections:
             try:
-                # Default to English if specific trans not found
                 text = language_map.get(lang, language_map.get("English", ""))
                 if text:
                     payload = {
@@ -131,7 +140,6 @@ class ConnectionManager:
                     await ws.send_json(payload)
             except:
                 disconnected.append(ws)
-        
         for ws in disconnected:
             self.disconnect(ws)
 
@@ -152,16 +160,17 @@ class AudioStreamProcessor:
         self.ffmpeg_process = None
         
     async def get_stream_info(self, url: str):
-        # Use impersonation to get valid stream and title
         ydl_opts = {
             'format': 'bestaudio/best', 
-            'quiet': True, 
+            'quiet': False, # Verbose logs enabled
             'noplaylist': True,
-            'extractor_args': {'generic': {'impersonate': True}} 
+            'extractor_args': {'twitter': {'impersonate': 'chrome'}},
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         loop = asyncio.get_event_loop()
         try:
             info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(url, download=False))
+            if not info: return None, None
             return info.get('url'), info.get('title', 'Unknown Broadcast')
         except Exception as e:
             logger.error(f"Failed to get stream info: {e}")
@@ -176,9 +185,14 @@ class AudioStreamProcessor:
         self.current_url = twitter_url
         self.audio_queue = asyncio.Queue()
         
+        logger.info(f"Extracting stream URL for: {twitter_url}")
         stream_url, title = await self.get_stream_info(twitter_url)
+        
         if not stream_url:
+            logger.error("Could not extract stream URL. Connection likely blocked or Invalid URL.")
             self.is_running = False
+            # SEND ERROR TO FRONTEND
+            await manager.broadcast_meta("⚠️ SYSTEM ERROR: INVALID SPACE URL ⚠️")
             return
 
         self.current_title = title
@@ -227,7 +241,6 @@ class AudioStreamProcessor:
                     f.write(header + audio_buffer)
                 
                 audio_buffer = bytearray() 
-                # Read file back into memory for API call
                 with open(temp_filename, "rb") as f:
                      wav_data = f.read()
                 
@@ -238,7 +251,6 @@ class AudioStreamProcessor:
 
     async def transcribe_and_distribute(self, wav_data):
         try:
-            # 1. Transcribe (Source Language) using GROQ WHISPER
             transcription = await client.audio.transcriptions.create(
                 file=("audio.wav", wav_data), 
                 model="whisper-large-v3", 
@@ -248,17 +260,10 @@ class AudioStreamProcessor:
 
             if text and len(text) > 5:
                 logger.info(f"Source: {text[:30]}...")
-                
-                # 2. Identify needed languages
                 needed_langs = manager.get_needed_languages()
                 results = {}
                 
-                # 3. Translate in parallel using GROQ LLAMA
                 async def translate_one(lang):
-                    # Optimized: If user wants same lang as source (approx), return source
-                    # But since we don't know source lang code for sure, we just ask LLM to be safe or copy
-                    # Simple heuristic: If Lang is English and text looks English, skip.
-                    # Ideally, let LLM handle it.
                     try:
                         chat = await client.chat.completions.create(
                             messages=[
@@ -277,7 +282,6 @@ class AudioStreamProcessor:
                     for lang, trans_text in translations:
                         results[lang] = trans_text
                 
-                # 4. Broadcast
                 await manager.broadcast_specific(results)
                 
         except Exception as e:
@@ -287,31 +291,33 @@ processor = AudioStreamProcessor()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
     try:
-        await websocket.accept()
-        data = await websocket.receive_json()
-        action = data.get("action", "join")
-        
-        if action == "stream":
-            # Admin Mode
-            manager.active_connections.append((websocket, "Admin"))
-            url = data.get("url")
-            if url:
-                asyncio.create_task(processor.start_stream(url))
-        else:
-            # Viewer Mode
-            target_lang = data.get("target_language", "English")
-            manager.active_connections.append((websocket, target_lang))
-            logger.info(f"Listener added: {target_lang}")
-            
-            if processor.current_title:
-                await websocket.send_json({"type": "meta", "title": processor.current_title})
-
         while True:
-            await websocket.receive_text() 
+            data = await websocket.receive_json()
+            action = data.get("action", "join")
+            
+            if action == "join":
+                # Clean up existing connection if present to update preference
+                manager.active_connections = [c for c in manager.active_connections if c[0] != websocket]
+                target_lang = data.get("target_language", "English")
+                manager.active_connections.append((websocket, target_lang))
+                logger.info(f"Client configured: {target_lang}")
+                
+                if processor.current_title:
+                    await websocket.send_json({"type": "meta", "title": processor.current_title})
+
+            elif action == "stream":
+                # User (Admin) requested to start a stream
+                url = data.get("url")
+                if url:
+                    logger.info(f"Received stream command for: {url}")
+                    asyncio.create_task(processor.start_stream(url))
+                    
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception as e:
+        logger.error(f"WS Connection Error: {e}")
         manager.disconnect(websocket)
 
 if __name__ == "__main__":
@@ -324,13 +330,23 @@ echo "pkill -f ngrok" >> start.sh
 echo "pkill -f xspace.py" >> start.sh
 echo "source \$HOME/miniconda3/etc/profile.d/conda.sh" >> start.sh
 echo "conda activate xspace" >> start.sh
-if [ -n "$NGROK_DOMAIN" ]; then
-    echo "ngrok http --url=$NGROK_DOMAIN 8000 > /dev/null &" >> start.sh
+
+# Start Ngrok
+if [ -n "\$NGROK_DOMAIN" ]; then
+    echo "ngrok http --domain=\$NGROK_DOMAIN 8000 > /dev/null &" >> start.sh
 else
     echo "ngrok http 8000 > /dev/null &" >> start.sh
 fi
 echo "sleep 3" >> start.sh
-echo "python xspace.py" >> start.sh
+
+# Infinite Restart Loop for Resilience
+echo "while true; do" >> start.sh
+echo "  echo 'Starting XSpace Server...'" >> start.sh
+echo "  python xspace.py" >> start.sh
+echo "  echo '⚠️ Server stopped! Restarting in 3 seconds... (Press Ctrl+C to stop)'" >> start.sh
+echo "  sleep 3" >> start.sh
+echo "done" >> start.sh
+
 chmod +x start.sh
 
 echo ""
