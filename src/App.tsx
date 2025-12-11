@@ -437,10 +437,10 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className={`h-[100dvh] ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none overflow-hidden transition-colors duration-300`}>
+    <div className={`min-h-[100dvh] h-auto md:h-[100dvh] ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none md:overflow-hidden transition-colors duration-300`}>
       
-      {/* --- SIDEBAR (FIXED) --- */}
-      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="w-full md:w-96 shrink-0 h-auto md:h-full flex flex-col max-h-[40vh] md:max-h-full">
+      {/* --- SIDEBAR (FIXED DESKTOP, AUTO MOBILE) --- */}
+      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="w-full md:w-96 shrink-0 h-auto md:h-full flex flex-col">
         <div className="p-4 space-y-6 overflow-y-auto flex-1 custom-scrollbar">
             
             {/* Header / Theme Switch */}
@@ -536,18 +536,20 @@ const App: React.FC = () => {
                 
                 <div className={`space-y-2 ${isMuted ? "opacity-30 pointer-events-none" : ""}`}>
                     {/* Voice Selector */}
-                    <div>
+                    <div className="w-full">
                          <label className={`block mb-1 text-sm ${theme.text}`}>Voice:</label>
                          <RetroSelect
                             isDark={isDarkMode}
                             value={selectedVoiceURI}
                             onChange={(e) => setSelectedVoiceURI(e.target.value)}
                             disabled={availableVoices.length === 0}
+                            className="w-full"
                          >
                             {availableVoices.length > 0 ? (
                                 availableVoices.map(v => (
-                                    <option key={v.voiceURI} value={v.voiceURI}>
-                                        {v.name.length > 25 ? v.name.substring(0, 25) + '...' : v.name}
+                                    <option key={v.voiceURI} value={v.voiceURI} className="text-sm">
+                                        {/* Truncate inside text for cleaner look, but logic is handled by container width mostly */}
+                                        {v.name.length > 30 ? v.name.substring(0, 30) + '...' : v.name}
                                     </option>
                                 ))
                             ) : (
@@ -561,11 +563,12 @@ const App: React.FC = () => {
                         <span>Speed</span>
                         <span>{playbackSpeed.toFixed(1)}x</span>
                     </div>
+                    {/* Larger touch target for mobile */}
                     <input 
                         type="range" min="0.5" max="3.0" step="0.1"
                         value={playbackSpeed}
                         onChange={handleSpeedChange}
-                        className={`w-full h-2 appearance-none ${isDarkMode ? 'bg-green-900' : 'bg-[#c0c0c0] border border-black'}`}
+                        className={`w-full h-6 appearance-none ${isDarkMode ? 'bg-green-900' : 'bg-[#c0c0c0] border border-black'}`}
                     />
                 </div>
             </fieldset>
@@ -592,7 +595,7 @@ const App: React.FC = () => {
       <RetroWindow 
         title={`Stream Output - ${targetLanguage.name.toUpperCase()}`} 
         isDark={isDarkMode} 
-        className="flex-1 min-h-0"
+        className="flex-1 min-h-[50vh] md:min-h-0" 
         actions={
             <button 
                 onClick={handleDownloadTranscript} 
