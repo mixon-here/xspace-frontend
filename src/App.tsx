@@ -740,7 +740,7 @@ const App: React.FC = () => {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <RetroWindow title="Admin Console (ROOT)" isDark={isDarkMode} className="w-full max-w-lg" onClose={() => setShowSettings(false)}>
-                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.5 beta</div>
+                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.7 beta</div>
                 <div className={`p-6 space-y-6 ${theme.text}`}>
                     
                     {/* BROADCAST CONTROL RESTORED HERE */}
