@@ -4,6 +4,7 @@ import { ConnectionState, TranscriptionItem, Language } from './types';
 import ExplanationModal from './components/ExplanationModal';
 import ServerSetup from './components/ServerSetup';
 import SecurityCheck from './components/SecurityCheck';
+import TetrisWidget from './components/TetrisWidget';
 
 const LANGUAGES: Language[] = [
   { code: 'ru', name: 'Russian', flag: '🇷🇺' },
@@ -383,9 +384,7 @@ const App: React.FC = () => {
           url: adminUrl
       }));
       
-      // UX Improvement: Inform user that the process has started and they should NOT disconnect
-      alert(`BROADCAST SIGNAL SENT!\n\nTarget: ${adminUrl}\n\nSystem is tuning in... \nDO NOT DISCONNECT OR TERMINATE LINK.`);
-      // Optional: Close modal automatically to show the "ON AIR" status
+      // Removed the blocking alert. The UI will update automatically via WS messages.
       setShowSettings(false);
   };
 
@@ -415,7 +414,8 @@ const App: React.FC = () => {
           content += `[${time}] ${speaker}: ${item.text}\n`;
       });
 
-      const blob = new Blob([content], { type: 'text/plain' });
+      // ADDED BOM (\uFEFF) AND SPECIFIED CHARSET FOR PROPER UTF-8 HANDLING ON MOBILE
+      const blob = new Blob(['\uFEFF' + content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -580,6 +580,11 @@ const App: React.FC = () => {
             >
                 {connectionState === 'CONNECTED' ? "Terminate Link" : "Establish Link"}
             </RetroButton>
+
+            {/* TETRIS WIDGET (HIDDEN ON MOBILE, VISIBLE ON DESKTOP) */}
+            <div className="hidden md:block">
+                 <TetrisWidget isDarkMode={isDarkMode} />
+            </div>
 
              {error && (
                 <div className={`p-2 border border-red-500 text-red-500 text-center ${isDarkMode ? 'bg-red-900/20' : 'bg-red-100'}`}>
