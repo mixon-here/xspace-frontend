@@ -12,9 +12,12 @@ const ServerSetup: React.FC<ServerSetupProps> = ({ onClose }) => {
     return `#!/bin/bash
 
 # ==========================================
-# XSPACE BROADCAST SERVER (v5.1 - HISTORY CACHE)
-# Architecture: Groq API Only
-# Features: History on Join + Aggressive Stop + Logging
+# XSPACE BROADCAST SERVER (v8.1 - BUGFIX)
+# Architecture: RAM Cache + Disk Backup
+# Features:
+# 1. Trigger-Based Translation Caching.
+# 2. Real-time Listener Statistics Broadcast.
+# 3. Detailed Console Logging (IP/Lang).
 # ==========================================
 
 echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
@@ -95,6 +98,7 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 SAMPWIDTH = 2
 BUFFER_SIZE = SAMPLE_RATE * CHANNELS * SAMPWIDTH * BUFFER_SECONDS 
+MAX_HISTORY_ITEMS = 3000
 
 client = AsyncGroq(api_key=API_KEY)
 
@@ -110,53 +114,107 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def translate_text(text: str, target_lang: str):
+    """Standalone translation helper"""
+    if target_lang == "English": return text
+    try:
+        chat = await client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": f"Translate this to {target_lang}. Return ONLY text."},
+                {"role": "user", "content": text}
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.3, max_tokens=1024,
+        )
+        return chat.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        return text
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[tuple[WebSocket, str]] = []
-        self.history: List[Dict] = [] # Store session history
+        self.history: List[Dict] = [] 
 
     async def connect(self, websocket: WebSocket, target_lang: str = "English"):
-        await websocket.accept()
+        # Removed redundant websocket.accept() to fix double-accept error
         self.active_connections.append((websocket, target_lang))
-        logger.info(f"Client joined ({target_lang}). Total: {len(self.active_connections)}")
+        
+        # Detailed Logging
+        client_ip = "Unknown"
+        if websocket.client:
+            client_ip = websocket.client.host
+        logger.info(f"🔌 CONNECTED: IP={client_ip} | LANG={target_lang} | TOTAL={len(self.active_connections)}")
+        
+        await self.broadcast_stats()
 
     def disconnect(self, websocket: WebSocket):
         self.active_connections = [c for c in self.active_connections if c[0] != websocket]
-        logger.info(f"Client disconnected. Total: {len(self.active_connections)}")
+        logger.info(f"👋 DISCONNECTED | REMAINING={len(self.active_connections)}")
+        pass
 
     def get_needed_languages(self) -> Set[str]:
         return set(c[1] for c in self.active_connections)
 
-    def add_history(self, text: str):
-        # Keep last 2000 items to avoid memory overflow, but enough for long AMAs
-        if len(self.history) > 2000:
+    def get_stats(self):
+        counts = {}
+        for _, lang in self.active_connections:
+            counts[lang] = counts.get(lang, 0) + 1
+        return {"total": len(self.active_connections), "breakdown": counts}
+
+    async def broadcast_stats(self):
+        stats = self.get_stats()
+        payload = {"type": "stats", "data": stats}
+        for ws, _ in self.active_connections:
+            try: await ws.send_json(payload)
+            except: pass
+
+    def add_history(self, original: str, translations: Dict[str, str]):
+        if len(self.history) > MAX_HISTORY_ITEMS:
             self.history.pop(0)
-        self.history.append({
-            "transcript": text,
-            "is_user": False,
+        
+        entry = {
+            "original": original,
+            "translations": translations,
             "timestamp": time.time()
-        })
+        }
+        self.history.append(entry)
+        
+        try:
+            with open("session_log.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\\n")
+        except Exception as e:
+            logger.error(f"Disk Write Error: {e}")
 
     def clear_history(self):
         self.history = []
-        logger.info("🧹 History cleared for new session.")
+        logger.info("🧹 RAM History cleared for new session.")
 
-    async def broadcast_specific(self, language_map: Dict[str, str]):
+    async def broadcast_result(self, original: str, translations: Dict[str, str]):
         disconnected = []
         for ws, lang in self.active_connections:
             try:
-                text = language_map.get(lang, language_map.get("English", ""))
-                if text:
+                text_to_send = ""
+                if lang == "English":
+                    text_to_send = original
+                elif lang in translations:
+                    text_to_send = translations[lang]
+                
+                if text_to_send:
                     payload = {
-                        "transcript": text,
+                        "transcript": text_to_send,
                         "is_user": False,
                         "timestamp": time.time()
                     }
                     await ws.send_json(payload)
             except:
                 disconnected.append(ws)
+        
         for ws in disconnected:
-            self.disconnect(ws)
+            self.active_connections = [c for c in self.active_connections if c[0] != ws]
+        
+        if disconnected:
+            await self.broadcast_stats()
 
     async def broadcast_meta(self, title: str):
         payload = {"type": "meta", "title": title}
@@ -193,46 +251,36 @@ class AudioStreamProcessor:
             return None, None
 
     async def stop_stream(self):
-        """Aggressively stop current stream and tasks"""
         if self.is_running:
             logger.info("🛑 STOPPING CURRENT STREAM...")
         
         self.is_running = False
-        manager.clear_history() # Clear history on stop
+        manager.clear_history() 
         
-        # 1. Kill FFmpeg immediately
         if self.ffmpeg_process:
             try:
-                self.ffmpeg_process.kill() # SIGKILL
+                self.ffmpeg_process.kill() 
                 await self.ffmpeg_process.wait()
             except: pass
             self.ffmpeg_process = None
 
-        # 2. Cancel Processing Task
         if self.processing_task:
             self.processing_task.cancel()
-            try:
-                await self.processing_task
-            except asyncio.CancelledError:
-                pass
+            try: await self.processing_task
+            except asyncio.CancelledError: pass
             self.processing_task = None
 
-        # 3. Clear Queue
         self.audio_queue = asyncio.Queue() 
-        
         self.current_url = None
         self.current_title = ""
         await manager.broadcast_meta("")
         logger.info("✅ STREAM STOPPED.")
 
     async def start_stream(self, twitter_url: str):
-        # Enforce Last-Write-Wins: Stop anything running first
         await self.stop_stream()
-        # Double ensure history is clear for new start
         manager.clear_history()
 
         logger.info(f"⏳ INITIALIZING NEW STREAM: {twitter_url}")
-        
         stream_url, title = await self.get_stream_info(twitter_url)
         
         if not stream_url:
@@ -247,7 +295,6 @@ class AudioStreamProcessor:
         logger.info(f"🎙️ ON AIR: {title}")
         await manager.broadcast_meta(title)
 
-        # Start concurrent tasks
         asyncio.create_task(self.run_ffmpeg(stream_url))
         self.processing_task = asyncio.create_task(self.process_audio())
 
@@ -263,9 +310,6 @@ class AudioStreamProcessor:
                 await self.audio_queue.put(chunk)
         except Exception as e:
             if self.is_running: logger.error(f"FFmpeg error: {e}")
-        finally:
-            if self.is_running:
-                logger.info("FFmpeg process finished naturally.")
 
     async def process_audio(self):
         audio_buffer = bytearray()
@@ -286,10 +330,8 @@ class AudioStreamProcessor:
                         f.write(header + audio_buffer)
                     
                     audio_buffer = bytearray() 
-                    
                     if os.path.exists(temp_filename):
-                        with open(temp_filename, "rb") as f:
-                             wav_data = f.read()
+                        with open(temp_filename, "rb") as f: wav_data = f.read()
                         asyncio.create_task(self.transcribe_and_distribute(wav_data, temp_filename))
         except asyncio.CancelledError:
             logger.info("Processing task cancelled.")
@@ -306,37 +348,30 @@ class AudioStreamProcessor:
             if text and len(text) > 5:
                 logger.info(f"🗣️ TRANSCRIPT: {text[:40]}...")
                 
-                # Save to history BEFORE translation loop (stores source text)
-                manager.add_history(text)
-                
+                # 1. Check ACTIVE listeners
                 needed_langs = manager.get_needed_languages()
-                results = {}
+                translations_cache = {}
                 
-                async def translate_one(lang):
-                    try:
-                        chat = await client.chat.completions.create(
-                            messages=[
-                                {"role": "system", "content": f"Translate this to {lang}. Return ONLY text."},
-                                {"role": "user", "content": text}
-                            ],
-                            model="llama-3.3-70b-versatile",
-                            temperature=0.3, max_tokens=1024,
-                        )
-                        return (lang, chat.choices[0].message.content)
-                    except: return (lang, text)
-
-                tasks = [translate_one(lang) for lang in needed_langs]
+                # 2. Trigger API calls ONLY for languages currently needed
+                tasks = []
+                for lang in needed_langs:
+                    if lang != "English":
+                        tasks.append(translate_text(text, lang))
+                
                 if tasks:
-                    translations = await asyncio.gather(*tasks)
-                    for lang, trans_text in translations:
-                        results[lang] = trans_text
+                    results = await asyncio.gather(*tasks)
+                    non_english_langs = [l for l in needed_langs if l != "English"]
+                    for i, lang in enumerate(non_english_langs):
+                        translations_cache[lang] = results[i]
                 
-                await manager.broadcast_specific(results)
+                # 3. Cache & Broadcast
+                manager.add_history(text, translations_cache)
+                await manager.broadcast_result(text, translations_cache)
+                
         except Exception as e:
             logger.error(f"Processing Error: {e}")
         finally:
-            if os.path.exists(filename):
-                os.remove(filename)
+            if os.path.exists(filename): os.remove(filename)
 
 processor = AudioStreamProcessor()
 
@@ -349,16 +384,33 @@ async def websocket_endpoint(websocket: WebSocket):
             action = data.get("action", "join")
             
             if action == "join":
+                # Remove existing same connection if any to prevent duplicates in logic (though websocket object is unique)
                 manager.active_connections = [c for c in manager.active_connections if c[0] != websocket]
+                
                 target_lang = data.get("target_language", "English")
-                manager.active_connections.append((websocket, target_lang))
+                await manager.connect(websocket, target_lang)
                 
                 if processor.current_title:
                     await websocket.send_json({"type": "meta", "title": processor.current_title})
                 
-                # SEND HISTORY ON JOIN
                 if manager.history:
-                     await websocket.send_json({"type": "history", "data": manager.history})
+                     user_history_payload = []
+                     for item in manager.history:
+                         text_content = ""
+                         if target_lang == "English":
+                             text_content = item["original"]
+                         elif target_lang in item["translations"]:
+                             text_content = item["translations"][target_lang]
+                         
+                         if text_content:
+                             user_history_payload.append({
+                                 "transcript": text_content,
+                                 "timestamp": item["timestamp"],
+                                 "is_user": False
+                             })
+                     
+                     if user_history_payload:
+                        await websocket.send_json({"type": "history", "data": user_history_payload})
 
             elif action == "stream":
                 url = data.get("url")
@@ -368,9 +420,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        await manager.broadcast_stats() # Update stats on disconnect
     except Exception as e:
         logger.error(f"WS Connection Error: {e}")
         manager.disconnect(websocket)
+        await manager.broadcast_stats()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
