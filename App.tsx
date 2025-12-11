@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Terminal, X as XIcon, ArrowDown, Sun, Moon, Volume2, VolumeX, Save, Radio, Lock } from 'lucide-react';
+import { Play, Sun, Moon, Volume2, VolumeX, Save, Radio, Lock, Signal, Globe, X as XIcon, ArrowDown } from 'lucide-react';
 import { ConnectionState, TranscriptionItem, Language } from './types';
 import ExplanationModal from './components/ExplanationModal';
 import ServerSetup from './components/ServerSetup';
@@ -20,7 +20,6 @@ const LANGUAGES: Language[] = [
   { code: 'ar', name: 'Arabic', flag: '🇸🇦' },
   { code: 'hi', name: 'Hindi', flag: '🇮🇳' },
   { code: 'tr', name: 'Turkish', flag: '🇹🇷' },
-  // New Additions
   { code: 'id', name: 'Indonesian', flag: '🇮🇩' },
   { code: 'vi', name: 'Vietnamese', flag: '🇻🇳' },
   { code: 'ur', name: 'Urdu', flag: '🇵🇰' },
@@ -91,15 +90,15 @@ const RetroSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { is
 
 const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isHumanVerified, setIsHumanVerified] = useState(false); // Security Check State
+  const [isHumanVerified, setIsHumanVerified] = useState(false);
 
   const [connectionState, setConnectionState] = useState<ConnectionState>('DISCONNECTED');
   const [transcriptions, setTranscriptions] = useState<TranscriptionItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
   // Settings
-  const [adminUrl, setAdminUrl] = useState<string>(''); // For Admin input
-  const [sessionTitle, setSessionTitle] = useState<string>(''); // Received from server
+  const [adminUrl, setAdminUrl] = useState<string>(''); 
+  const [sessionTitle, setSessionTitle] = useState<string>(''); 
   const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
   
   // Voice
@@ -109,11 +108,14 @@ const App: React.FC = () => {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
   
-  // Admin & Modals
+  // Modals
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showServerHelp, setShowServerHelp] = useState<boolean>(false);
-  const [logoClicks, setLogoClicks] = useState<number>(0);
   const [showExplanation, setShowExplanation] = useState<boolean>(true);
+
+  // Secret Menu Logic
+  const [logoClicks, setLogoClicks] = useState<number>(0);
+  const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Languages
   const [sourceLanguage, setSourceLanguage] = useState<Language>(LANGUAGES.find(l => l.code === 'en') || LANGUAGES[1]); 
@@ -129,20 +131,18 @@ const App: React.FC = () => {
   const isSpeaking = useRef<boolean>(false);
   const playbackSpeedRef = useRef<number>(1.1);
 
-  // Theme constants
   const theme = isDarkMode ? {
       bg: 'bg-black',
       text: 'text-green-500',
       border: 'border-green-500',
-      mutedText: 'text-green-800'
+      mutedText: 'text-green-600'
   } : {
       bg: 'bg-[#008080]',
       text: 'text-black',
       border: 'border-black',
-      mutedText: 'text-gray-600'
+      mutedText: 'text-gray-800'
   };
 
-  // --- VOICE LOGIC ---
   useEffect(() => { 
       const loadVoices = () => {
           if (window.speechSynthesis) {
@@ -156,19 +156,13 @@ const App: React.FC = () => {
       }
   }, []);
 
-  // Filter voices when language changes or voices load
   useEffect(() => {
     if (allVoices.length === 0) return;
-
-    // Filter by exact code match (e.g., 'ru-RU') or fuzzy match ('ru')
     const filtered = allVoices.filter(v => 
         v.lang.toLowerCase() === targetLanguage.code.toLowerCase() || 
         v.lang.toLowerCase().startsWith(targetLanguage.code.toLowerCase())
     );
-
     setAvailableVoices(filtered);
-
-    // If current selected voice is not in new list, pick first available
     if (filtered.length > 0) {
         const currentStillValid = filtered.find(v => v.voiceURI === selectedVoiceURI);
         if (!currentStillValid) {
@@ -179,8 +173,6 @@ const App: React.FC = () => {
     }
   }, [allVoices, targetLanguage, selectedVoiceURI]);
 
-
-  // Auto-scroll logic
   useEffect(() => {
     if (chatContainerRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
@@ -204,19 +196,6 @@ const App: React.FC = () => {
       }
   };
 
-  // Secret Admin Handler on Avatar
-  const handleAvatarClick = () => {
-    setLogoClicks(prev => {
-        const newCount = prev + 1;
-        if (newCount >= 5) {
-            setShowSettings(true);
-            return 0;
-        }
-        return newCount;
-    });
-    setTimeout(() => setLogoClicks(0), 2000);
-  };
-
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newSpeed = parseFloat(e.target.value);
       setPlaybackSpeed(newSpeed);
@@ -224,14 +203,32 @@ const App: React.FC = () => {
   };
 
   const unlockAudio = () => {
-      // iOS Hack: trigger empty speech on user interaction to unlock synth
       if (window.speechSynthesis && isMuted === false) {
           const u = new SpeechSynthesisUtterance("");
           window.speechSynthesis.speak(u);
       }
   }
 
-  // TTS Logic
+  // --- SECRET MENU HANDLER ---
+  const handleAvatarClick = () => {
+    setLogoClicks(prev => {
+        const newCount = prev + 1;
+        if (newCount >= 10) { // 10 Clicks to unlock
+            setShowSettings(true);
+            return 0;
+        }
+        return newCount;
+    });
+
+    // Reset counter if idle for 2 seconds
+    if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+    }
+    clickTimeoutRef.current = setTimeout(() => {
+        setLogoClicks(0);
+    }, 2000);
+  };
+
   const getSelectedVoice = (): SpeechSynthesisVoice | null => {
       if (!selectedVoiceURI || allVoices.length === 0) return null;
       return allVoices.find(v => v.voiceURI === selectedVoiceURI) || null;
@@ -285,9 +282,7 @@ const App: React.FC = () => {
   };
 
   const connectToBackend = async () => {
-    // Attempt iOS unlock
     unlockAudio();
-
     clearQueueAndStopSpeech();
     setConnectionState('CONNECTING');
     setError(null);
@@ -299,10 +294,10 @@ const App: React.FC = () => {
 
       ws.onopen = () => {
         setConnectionState('CONNECTED');
-        // Join the session (Viewer Mode)
+        // Initial handshake: Join as listener with language preference
         ws.send(JSON.stringify({
             action: 'join',
-            target_language: targetLanguage.name, // "Russian"
+            target_language: targetLanguage.name,
         }));
       };
 
@@ -310,9 +305,9 @@ const App: React.FC = () => {
         try {
             const data = JSON.parse(event.data);
             
-            // Handle Metadata Update (Title, etc)
             if (data.type === 'meta') {
-                if (data.title) setSessionTitle(data.title);
+                // If title is received, update it. If empty string is sent, it means stream stopped.
+                setSessionTitle(data.title || '');
                 return;
             }
 
@@ -373,22 +368,24 @@ const App: React.FC = () => {
     else connectToBackend();
   };
 
-  const handleAdminStartBroadcast = () => {
+  const handleStartBroadcast = () => {
       if (!websocketRef.current || connectionState !== 'CONNECTED') {
-          alert("Please ESTABLISH LINK first!");
+          alert("Please ESTABLISH LINK first! Connect to the server before starting broadcast.");
           return;
       }
       if (!adminUrl) {
           alert("Enter a URL!");
           return;
       }
-      // Send Admin Command
+      // Send Stream Command through existing connection
       websocketRef.current.send(JSON.stringify({
           action: 'stream',
-          url: adminUrl,
-          src_code: 'en', // Default source
-          source_language: 'English'
+          url: adminUrl
       }));
+      
+      // UX Improvement: Inform user that the process has started and they should NOT disconnect
+      alert(`BROADCAST SIGNAL SENT!\n\nTarget: ${adminUrl}\n\nSystem is tuning in... \nDO NOT DISCONNECT OR TERMINATE LINK.`);
+      // Optional: Close modal automatically to show the "ON AIR" status
       setShowSettings(false);
   };
 
@@ -402,13 +399,16 @@ const App: React.FC = () => {
   };
 
   const handleDownloadTranscript = () => {
-      if (transcriptions.length === 0) return;
-      
+      if (transcriptions.length === 0) {
+          alert("No transcript data to save yet.");
+          return;
+      }
+
       let content = `XSPACE TRANSCRIPT LOG - ${new Date().toLocaleString()}\n`;
       content += `SESSION: ${sessionTitle || 'Unknown'}\n`;
       content += `LANG: ${targetLanguage.name}\n`;
       content += `-------------------------------------------\n\n`;
-
+      
       transcriptions.forEach(item => {
           const time = item.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
           const speaker = item.sender === 'user' ? 'AUDIO' : 'TRANS';
@@ -423,10 +423,15 @@ const App: React.FC = () => {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      
+      // Delay revocation for mobile browsers
+      setTimeout(() => {
+          URL.revokeObjectURL(url);
+      }, 500);
   };
 
-  // If not human verified, show security check
+  const isErrorState = sessionTitle.includes("ERROR");
+
   if (!isHumanVerified) {
     return <SecurityCheck onVerified={() => setIsHumanVerified(true)} isDarkMode={isDarkMode} />;
   }
@@ -449,9 +454,9 @@ const App: React.FC = () => {
                 </button>
             </div>
 
-            {/* Developer ID Card */}
+            {/* Developer ID Card - Secret Menu Trigger */}
             <div className={`border-2 p-3 flex gap-4 items-center relative group select-none cursor-pointer
-                ${isDarkMode ? 'bg-gray-900 border-green-500' : 'bg-[#e0e0e0] border-t-white border-l-white border-b-black border-r-black'}`}
+                ${isDarkMode ? 'bg-black border-green-500' : 'bg-[#e0e0e0] border-t-white border-l-white border-b-black border-r-black'}`}
                 onClick={handleAvatarClick}
             >
                 <div className={`w-16 h-16 shrink-0 overflow-hidden relative border-2 ${isDarkMode ? 'border-green-500' : 'border-black'}`}>
@@ -463,28 +468,26 @@ const App: React.FC = () => {
                     />
                 </div>
                 <div className="flex flex-col">
-                    <span className={`font-bold text-sm tracking-widest ${theme.mutedText}`}>DEVELOPER ID</span>
+                    <span className={`font-bold text-sm tracking-widest ${isDarkMode ? 'text-green-600' : 'text-gray-800'}`}>DEVELOPER ID</span>
                     <a href="https://x.com/mixon_here" target="_blank" className={`font-bold text-xl hover:underline ${isDarkMode ? 'text-green-400' : 'text-[#000080]'}`}>@mixon_here</a>
-                    {/* UPDATED TEXT */}
-                    <span className="text-xs uppercase opacity-70">Subscribe to Support</span>
+                    <span className={`text-xs uppercase font-bold ${isDarkMode ? 'text-green-700' : 'text-gray-700'}`}>Subscribe to Support</span>
                 </div>
             </div>
 
             {/* Status / Session Info */}
-            <fieldset className={`border-2 p-2 pt-1 mt-2 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
-                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Transmission Data</legend>
+            <fieldset className={`border-2 p-2 pt-1 mt-2 w-full min-w-0 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
+                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Status</legend>
                 <div className="flex items-center gap-3 mb-2">
-                    <div className={`w-4 h-4 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
+                    <div className={`w-4 h-4 shrink-0 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
                     <span className={`uppercase tracking-widest ${theme.text}`}>
                         {connectionState === 'CONNECTED' ? 'ONLINE' : 'OFFLINE'}
                     </span>
                 </div>
                 
-                {/* MARQUEE FOR SESSION TITLE */}
-                <div className={`border-2 border-inset p-2 overflow-hidden ${isDarkMode ? 'bg-black border-green-800' : 'bg-black border-gray-600'}`}>
+                <div className={`border-2 border-inset p-2 overflow-hidden w-full relative ${isDarkMode ? 'bg-black border-green-800' : 'bg-black border-gray-600'}`}>
                     {connectionState === 'CONNECTED' ? (
-                        <div className="whitespace-nowrap animate-marquee text-[#00ff00]">
-                            {sessionTitle ? `>>> ON AIR: ${sessionTitle} <<<` : ">>> WAITING FOR SIGNAL <<<"}
+                        <div className={`whitespace-nowrap ${sessionTitle ? 'animate-marquee' : 'text-center'} ${isErrorState ? 'text-red-500 font-bold' : (isDarkMode ? 'text-green-500' : 'text-[#00ff00]')}`}>
+                            {sessionTitle ? (isErrorState ? sessionTitle : `>>> ON AIR: ${sessionTitle} <<<`) : ">>> WAITING FOR BROADCAST <<<"}
                         </div>
                     ) : (
                         <div className="text-red-500 text-center">NO SIGNAL</div>
@@ -503,7 +506,7 @@ const App: React.FC = () => {
                 `}</style>
             </fieldset>
 
-            {/* Config (User side only sees Language) */}
+            {/* Config */}
             <div className={`space-y-4 ${theme.text}`}>
                 <div className="grid grid-cols-1 gap-2">
                     <div>
@@ -522,7 +525,7 @@ const App: React.FC = () => {
 
             {/* Audio Config */}
             <fieldset className={`border-2 p-2 pt-1 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
-                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Audio Config</legend>
+                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Audio</legend>
                 <div className={`flex items-center justify-between mb-2 ${theme.text}`}>
                     <span>Sound:</span>
                     <RetroButton isDark={isDarkMode} onClick={toggleMute} className="flex items-center gap-2">
@@ -532,7 +535,7 @@ const App: React.FC = () => {
                 </div>
                 
                 <div className={`space-y-2 ${isMuted ? "opacity-30 pointer-events-none" : ""}`}>
-                     {/* Voice Selector */}
+                    {/* Voice Selector */}
                     <div>
                          <label className={`block mb-1 text-sm ${theme.text}`}>Voice:</label>
                          <RetroSelect
@@ -553,6 +556,7 @@ const App: React.FC = () => {
                          </RetroSelect>
                     </div>
 
+                    {/* Speed Slider Restored */}
                     <div className={`flex justify-between text-sm ${theme.text}`}>
                         <span>Speed</span>
                         <span>{playbackSpeed.toFixed(1)}x</span>
@@ -605,9 +609,24 @@ const App: React.FC = () => {
           >
                {transcriptions.length === 0 && (
                    <div className="h-full flex flex-col items-center justify-center opacity-50">
-                       <Radio size={64} className="animate-pulse mb-4" />
-                       <p className="text-2xl">TUNING IN...</p>
-                       <p className="text-sm opacity-60 mt-2">Waiting for translation data.</p>
+                       <Radio size={64} className={`mb-4 ${connectionState === 'CONNECTED' ? 'animate-pulse' : ''} ${isErrorState ? 'text-red-500' : ''}`} />
+                       
+                       {/* LOGIC FOR STATUS MESSAGES */}
+                       <p className={`text-2xl ${isErrorState ? 'text-red-500' : ''}`}>
+                           {connectionState === 'CONNECTED' 
+                               ? (sessionTitle 
+                                   ? (isErrorState ? "BROADCAST ERROR" : "TUNING IN...") 
+                                   : "NO ACTIVE BROADCAST") 
+                               : "WAITING FOR CONNECTION..."}
+                       </p>
+                       
+                       <p className="text-sm opacity-60 mt-2 text-center max-w-sm">
+                           {connectionState === 'CONNECTED' 
+                                ? (sessionTitle 
+                                    ? (isErrorState ? "The Admin provided an invalid or expired Twitter Space URL." : "Receiving translation data...") 
+                                    : "Server connected. Waiting for admin to start the stream.")
+                                : "Click 'Establish Link' to connect to the server."}
+                       </p>
                    </div>
                )}
 
@@ -636,7 +655,6 @@ const App: React.FC = () => {
                    )
                })}
                
-               {/* Jump to Live Button */}
                {showScrollBottom && (
                    <div className="sticky bottom-4 left-0 right-0 flex justify-center pointer-events-none">
                        <button 
@@ -657,9 +675,10 @@ const App: React.FC = () => {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <RetroWindow title="Admin Console (ROOT)" isDark={isDarkMode} className="w-full max-w-lg" onClose={() => setShowSettings(false)}>
-                 {/* VERSION DISPLAY */}
-                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.0.1 beta</div>
+                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.2 beta</div>
                 <div className={`p-6 space-y-6 ${theme.text}`}>
+                    
+                    {/* BROADCAST CONTROL RESTORED HERE */}
                     <div className="border-b pb-4 mb-4 border-gray-600">
                         <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Lock size={20}/> BROADCAST CONTROL</h3>
                         <label className="block mb-1">Target URL (Twitter Space):</label>
@@ -669,10 +688,10 @@ const App: React.FC = () => {
                             onChange={(e) => setAdminUrl(e.target.value)}
                             placeholder="https://x.com/..."
                         />
-                        <div className="mt-4 flex justify-end">
+                         <div className="mt-4 flex justify-end">
                              <RetroButton 
                                 isDark={isDarkMode} 
-                                onClick={handleAdminStartBroadcast}
+                                onClick={handleStartBroadcast}
                                 className="bg-red-600 text-white border-red-800 hover:bg-red-700"
                             >
                                 START BROADCAST
@@ -688,7 +707,6 @@ const App: React.FC = () => {
                             onChange={(e) => setServerUrl(e.target.value)}
                             className="w-full font-mono text-lg"
                         />
-                        <p className="text-sm opacity-60 mt-1">Must start with wss:// for secure connections.</p>
                     </div>
                     <div className="flex justify-end gap-4 pt-4 border-t border-gray-600">
                         <RetroButton isDark={isDarkMode} onClick={() => setShowServerHelp(true)}>Get Server Script</RetroButton>
