@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Sun, Moon, Volume2, VolumeX, Save, Radio, Lock, Signal, Globe, X as XIcon, ArrowDown } from 'lucide-react';
+import { Play, Sun, Moon, Volume2, VolumeX, Save, Radio, Lock, Signal, Globe, X as XIcon, ArrowDown, Settings, Power, Users } from 'lucide-react';
 import { ConnectionState, TranscriptionItem, Language } from './types';
 import ExplanationModal from './components/ExplanationModal';
 import ServerSetup from './components/ServerSetup';
@@ -102,6 +102,9 @@ const App: React.FC = () => {
   const [sessionTitle, setSessionTitle] = useState<string>(''); 
   const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
   
+  // Stats
+  const [serverStats, setServerStats] = useState<{ total: number; breakdown: Record<string, number> } | null>(null);
+
   // Voice
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.1);
@@ -136,12 +139,14 @@ const App: React.FC = () => {
       bg: 'bg-black',
       text: 'text-green-500',
       border: 'border-green-500',
-      mutedText: 'text-green-600'
+      mutedText: 'text-green-600',
+      mobilePanel: 'bg-gray-900 border-green-500',
   } : {
       bg: 'bg-[#008080]',
       text: 'text-black',
       border: 'border-black',
-      mutedText: 'text-gray-800'
+      mutedText: 'text-gray-800',
+      mobilePanel: 'bg-[#c0c0c0] border-t-white border-l-white border-b-black border-r-black border-2',
   };
 
   useEffect(() => { 
@@ -312,6 +317,11 @@ const App: React.FC = () => {
                 return;
             }
 
+            if (data.type === 'stats') {
+                setServerStats(data.data);
+                return;
+            }
+
             if (data.type === 'history') {
                 const historyItems = data.data.map((item: any) => ({
                     id: 'hist-' + Math.random().toString(36),
@@ -349,11 +359,13 @@ const App: React.FC = () => {
 
       ws.onclose = () => {
         if (connectionState === 'CONNECTED') setConnectionState('DISCONNECTED');
+        setServerStats(null);
       };
 
     } catch (netErr: any) {
       setError(netErr.message);
       setConnectionState('DISCONNECTED');
+      setServerStats(null);
     }
   };
 
@@ -362,6 +374,7 @@ const App: React.FC = () => {
     clearQueueAndStopSpeech();
     setConnectionState('DISCONNECTED');
     setSessionTitle('');
+    setServerStats(null);
   };
 
   const toggleSession = () => {
@@ -437,10 +450,54 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className={`min-h-[100dvh] h-auto md:h-[100dvh] ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none md:overflow-hidden transition-colors duration-300`}>
+    <div className={`min-h-screen md:min-h-[100dvh] h-auto md:h-[100dvh] ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none md:overflow-hidden transition-colors duration-300`}>
       
-      {/* --- SIDEBAR (FIXED DESKTOP, AUTO MOBILE) --- */}
-      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="w-full md:w-96 shrink-0 h-auto md:h-full flex flex-col">
+      {/* --- MOBILE CONTROL PANEL (VISIBLE ONLY ON MOBILE) --- */}
+      <div className={`md:hidden p-3 rounded shadow-lg flex flex-col gap-3 shrink-0 ${theme.mobilePanel}`}>
+          {/* Header */}
+          <div className="flex justify-between items-center">
+              <h1 className={`text-2xl font-bold ${isDarkMode ? 'text-green-500' : 'text-black'}`}>XSpace 98</h1>
+              <div className="flex gap-2">
+                 <button onClick={() => setShowSettings(true)} className="p-1 border bg-white/10"><Settings size={20} className={theme.text}/></button>
+                 <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-1 border bg-white/10">{isDarkMode ? <Sun size={20} className={theme.text}/> : <Moon size={20} className={theme.text}/>}</button>
+              </div>
+          </div>
+
+          {/* Connection & Status */}
+          <div className="flex gap-2 items-stretch">
+             <RetroButton isDark={isDarkMode} onClick={toggleSession} className={`flex-1 flex justify-center items-center gap-2 py-3 ${connectionState === 'CONNECTED' ? 'bg-red-200' : ''}`}>
+                 <Power size={18} />
+                 {connectionState === 'CONNECTED' ? "DISCONNECT" : "CONNECT"}
+             </RetroButton>
+             
+             <div className={`flex-1 border-2 border-inset bg-black flex items-center overflow-hidden px-2 ${isDarkMode ? 'border-green-800' : 'border-gray-500'}`}>
+                 <div className={`whitespace-nowrap w-full ${sessionTitle ? 'animate-marquee' : 'text-center'} ${isDarkMode ? 'text-green-500' : 'text-[#00ff00]'}`}>
+                     {sessionTitle || (connectionState === 'CONNECTED' ? "WAITING..." : "OFFLINE")}
+                 </div>
+             </div>
+          </div>
+
+          {/* Quick Config */}
+          <div className="grid grid-cols-2 gap-2">
+             <RetroSelect isDark={isDarkMode} value={targetLanguage.code} onChange={(e) => setTargetLanguage(LANGUAGES.find(l => l.code === e.target.value) || LANGUAGES[0])}>
+                 {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
+             </RetroSelect>
+             <RetroButton isDark={isDarkMode} onClick={toggleMute} className="flex justify-center items-center gap-2">
+                 {isMuted ? <VolumeX size={18}/> : <Volume2 size={18}/>}
+                 {isMuted ? "MUTED" : "SOUND ON"}
+             </RetroButton>
+          </div>
+          
+          {/* Voice Select Mobile */}
+          {!isMuted && (
+             <RetroSelect isDark={isDarkMode} value={selectedVoiceURI} onChange={(e) => setSelectedVoiceURI(e.target.value)}>
+                {availableVoices.length > 0 ? availableVoices.map(v => <option key={v.voiceURI} value={v.voiceURI}>{v.name.slice(0, 20)}..</option>) : <option>Default Voice</option>}
+             </RetroSelect>
+          )}
+      </div>
+
+      {/* --- SIDEBAR (DESKTOP ONLY) --- */}
+      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="hidden md:flex w-96 shrink-0 h-full flex-col">
         <div className="p-4 space-y-6 overflow-y-auto flex-1 custom-scrollbar">
             
             {/* Header / Theme Switch */}
@@ -600,7 +657,7 @@ const App: React.FC = () => {
       <RetroWindow 
         title={`Stream Output - ${targetLanguage.name.toUpperCase()}`} 
         isDark={isDarkMode} 
-        className="flex-1 min-h-[50vh] md:min-h-0" 
+        className="flex-1 h-[40vh] md:h-auto min-h-0 md:min-h-0" 
         actions={
             <button 
                 onClick={handleDownloadTranscript} 
@@ -657,7 +714,7 @@ const App: React.FC = () => {
                                     <Play size={20} fill="currentColor" />
                                 </button>
                             )}
-                            <p className="text-2xl leading-relaxed">{item.text}</p>
+                            <p className="text-xl md:text-2xl leading-relaxed">{item.text}</p>
                         </div>
                    </div>
                    )
@@ -683,7 +740,7 @@ const App: React.FC = () => {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <RetroWindow title="Admin Console (ROOT)" isDark={isDarkMode} className="w-full max-w-lg" onClose={() => setShowSettings(false)}>
-                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.2 beta</div>
+                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.5 beta</div>
                 <div className={`p-6 space-y-6 ${theme.text}`}>
                     
                     {/* BROADCAST CONTROL RESTORED HERE */}
@@ -706,6 +763,31 @@ const App: React.FC = () => {
                             </RetroButton>
                         </div>
                     </div>
+
+                    {/* LIVE STATS DISPLAY */}
+                    <div className={`border-2 p-3 ${isDarkMode ? 'border-green-600 bg-black/50' : 'border-gray-500 bg-gray-100'}`}>
+                         <h4 className="font-bold flex items-center gap-2 mb-2"><Users size={16}/> LIVE STATISTICS</h4>
+                         {serverStats ? (
+                             <>
+                             <div className="text-lg font-bold border-b border-gray-600 mb-2 pb-1">
+                                 TOTAL LISTENERS: {serverStats.total}
+                             </div>
+                             <div className="grid grid-cols-2 gap-2 text-sm">
+                                 {Object.entries(serverStats.breakdown).map(([lang, count]) => (
+                                     <div key={lang} className="flex justify-between">
+                                         <span>{lang}:</span>
+                                         <span className="font-mono font-bold">{count}</span>
+                                     </div>
+                                 ))}
+                                 {Object.keys(serverStats.breakdown).length === 0 && <div className="col-span-2 opacity-50 italic">No listeners yet</div>}
+                             </div>
+                             </>
+                         ) : (
+                             <div className="text-sm opacity-50 italic">
+                                 {connectionState === 'CONNECTED' ? "Waiting for data..." : "Server Offline"}
+                             </div>
+                         )}
+                     </div>
 
                     <div>
                         <p className="mb-2 uppercase font-bold">WebSocket Endpoint:</p>
