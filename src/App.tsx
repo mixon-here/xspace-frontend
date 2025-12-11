@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Terminal, X as XIcon, ArrowDown, Sun, Moon, Volume2, VolumeX } from 'lucide-react';
+import { Play, Sun, Moon, Volume2, VolumeX, Save, Radio, Lock, Signal, Globe, X as XIcon, ArrowDown } from 'lucide-react';
 import { ConnectionState, TranscriptionItem, Language } from './types';
 import ExplanationModal from './components/ExplanationModal';
 import ServerSetup from './components/ServerSetup';
+import SecurityCheck from './components/SecurityCheck';
 
 const LANGUAGES: Language[] = [
   { code: 'ru', name: 'Russian', flag: '🇷🇺' },
@@ -19,11 +20,18 @@ const LANGUAGES: Language[] = [
   { code: 'ar', name: 'Arabic', flag: '🇸🇦' },
   { code: 'hi', name: 'Hindi', flag: '🇮🇳' },
   { code: 'tr', name: 'Turkish', flag: '🇹🇷' },
+  { code: 'id', name: 'Indonesian', flag: '🇮🇩' },
+  { code: 'vi', name: 'Vietnamese', flag: '🇻🇳' },
+  { code: 'ur', name: 'Urdu', flag: '🇵🇰' },
+  { code: 'tl', name: 'Filipino', flag: '🇵🇭' },
+  { code: 'bn', name: 'Bengali', flag: '🇧🇩' },
+  { code: 'ha', name: 'Hausa', flag: '🇳🇬' },
+  { code: 'yo', name: 'Yoruba', flag: '🇳🇬' },
 ];
 
 // --- RETRO UI COMPONENTS ---
 
-const RetroWindow: React.FC<{ title: string; children: React.ReactNode; className?: string; onClose?: () => void; isDark: boolean }> = ({ title, children, className = "", onClose, isDark }) => {
+const RetroWindow: React.FC<{ title: string; children: React.ReactNode; className?: string; onClose?: () => void; isDark: boolean; actions?: React.ReactNode }> = ({ title, children, className = "", onClose, isDark, actions }) => {
     const styles = isDark ? {
         border: 'border border-green-500',
         bg: 'bg-gray-900',
@@ -40,11 +48,14 @@ const RetroWindow: React.FC<{ title: string; children: React.ReactNode; classNam
         <div className={`${styles.bg} ${styles.border} flex flex-col ${className}`}>
             <div className={`${styles.header} px-2 py-1 flex justify-between items-center select-none shrink-0`}>
                 <span className="font-bold tracking-wider text-lg truncate pr-2">{title}</span>
-                {onClose && (
-                    <button onClick={onClose} className={`w-5 h-5 flex items-center justify-center font-bold text-sm leading-none ${styles.closeBtn}`}>
-                        <XIcon size={14} />
-                    </button>
-                )}
+                <div className="flex items-center gap-2">
+                    {actions}
+                    {onClose && (
+                        <button onClick={onClose} className={`w-5 h-5 flex items-center justify-center font-bold text-sm leading-none ${styles.closeBtn}`}>
+                            <XIcon size={14} />
+                        </button>
+                    )}
+                </div>
             </div>
             <div className="flex-1 flex flex-col min-h-0 relative">
                 {children}
@@ -79,25 +90,32 @@ const RetroSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { is
 
 const App: React.FC = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
-  // FIXED: Using string literal default
+  const [isHumanVerified, setIsHumanVerified] = useState(false);
+
   const [connectionState, setConnectionState] = useState<ConnectionState>('DISCONNECTED');
   const [transcriptions, setTranscriptions] = useState<TranscriptionItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
   // Settings
-  const [twitterUrl, setTwitterUrl] = useState<string>('');
-  // FIXED: Hardcoded URL
+  const [adminUrl, setAdminUrl] = useState<string>(''); 
+  const [sessionTitle, setSessionTitle] = useState<string>(''); 
   const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
   
   // Voice
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.1);
+  const [allVoices, setAllVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
   
-  // Admin & Modals
+  // Modals
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showServerHelp, setShowServerHelp] = useState<boolean>(false);
-  const [logoClicks, setLogoClicks] = useState<number>(0);
   const [showExplanation, setShowExplanation] = useState<boolean>(true);
+
+  // Secret Menu Logic
+  const [logoClicks, setLogoClicks] = useState<number>(0);
+  const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Languages
   const [sourceLanguage, setSourceLanguage] = useState<Language>(LANGUAGES.find(l => l.code === 'en') || LANGUAGES[1]); 
@@ -113,20 +131,48 @@ const App: React.FC = () => {
   const isSpeaking = useRef<boolean>(false);
   const playbackSpeedRef = useRef<number>(1.1);
 
-  // Theme constants
   const theme = isDarkMode ? {
       bg: 'bg-black',
       text: 'text-green-500',
       border: 'border-green-500',
-      mutedText: 'text-green-800'
+      mutedText: 'text-green-600'
   } : {
       bg: 'bg-[#008080]',
       text: 'text-black',
       border: 'border-black',
-      mutedText: 'text-gray-600'
+      mutedText: 'text-gray-800'
   };
 
-  // Auto-scroll logic
+  useEffect(() => { 
+      const loadVoices = () => {
+          if (window.speechSynthesis) {
+              const voices = window.speechSynthesis.getVoices();
+              setAllVoices(voices);
+          }
+      }
+      loadVoices();
+      if (window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined) {
+          window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+  }, []);
+
+  useEffect(() => {
+    if (allVoices.length === 0) return;
+    const filtered = allVoices.filter(v => 
+        v.lang.toLowerCase() === targetLanguage.code.toLowerCase() || 
+        v.lang.toLowerCase().startsWith(targetLanguage.code.toLowerCase())
+    );
+    setAvailableVoices(filtered);
+    if (filtered.length > 0) {
+        const currentStillValid = filtered.find(v => v.voiceURI === selectedVoiceURI);
+        if (!currentStillValid) {
+            setSelectedVoiceURI(filtered[0].voiceURI);
+        }
+    } else {
+        setSelectedVoiceURI('');
+    }
+  }, [allVoices, targetLanguage, selectedVoiceURI]);
+
   useEffect(() => {
     if (chatContainerRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
@@ -150,26 +196,44 @@ const App: React.FC = () => {
       }
   };
 
-  // Secret Admin Handler on Avatar
-  const handleAvatarClick = () => {
-    setLogoClicks(prev => {
-        const newCount = prev + 1;
-        if (newCount >= 5) {
-            setShowSettings(true);
-            return 0;
-        }
-        return newCount;
-    });
-    setTimeout(() => setLogoClicks(0), 2000);
-  };
-
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newSpeed = parseFloat(e.target.value);
       setPlaybackSpeed(newSpeed);
       playbackSpeedRef.current = newSpeed;
   };
 
-  // TTS Logic
+  const unlockAudio = () => {
+      if (window.speechSynthesis && isMuted === false) {
+          const u = new SpeechSynthesisUtterance("");
+          window.speechSynthesis.speak(u);
+      }
+  }
+
+  // --- SECRET MENU HANDLER ---
+  const handleAvatarClick = () => {
+    setLogoClicks(prev => {
+        const newCount = prev + 1;
+        if (newCount >= 10) { // 10 Clicks to unlock
+            setShowSettings(true);
+            return 0;
+        }
+        return newCount;
+    });
+
+    // Reset counter if idle for 2 seconds
+    if (clickTimeoutRef.current) {
+        clearTimeout(clickTimeoutRef.current);
+    }
+    clickTimeoutRef.current = setTimeout(() => {
+        setLogoClicks(0);
+    }, 2000);
+  };
+
+  const getSelectedVoice = (): SpeechSynthesisVoice | null => {
+      if (!selectedVoiceURI || allVoices.length === 0) return null;
+      return allVoices.find(v => v.voiceURI === selectedVoiceURI) || null;
+  };
+
   const processSpeechQueue = () => {
     if (isSpeaking.current || speechQueue.current.length === 0 || isMuted) return;
 
@@ -178,8 +242,8 @@ const App: React.FC = () => {
     if (!text) { isSpeaking.current = false; return; }
 
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const voice = voices.find(v => v.lang.startsWith(targetLanguage.code));
+    const voice = getSelectedVoice();
+    
     if (voice) utterance.voice = voice;
     utterance.rate = playbackSpeedRef.current; 
 
@@ -200,8 +264,8 @@ const App: React.FC = () => {
       isSpeaking.current = true;
       speechQueue.current = [];
       const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      const voice = voices.find(v => v.lang.startsWith(targetLanguage.code));
+      const voice = getSelectedVoice();
+      
       if (voice) utterance.voice = voice;
       utterance.rate = playbackSpeedRef.current;
       utterance.onend = () => {
@@ -218,15 +282,8 @@ const App: React.FC = () => {
   };
 
   const connectToBackend = async () => {
-    if (!twitterUrl.trim()) { setError("Input URL required."); return; }
-    // Clean URL check for hardcoded setup
-    if (!serverUrl || serverUrl.includes("YOUR_NGROK")) { 
-        // Allow it for now since we hardcoded it, but typically we'd warn
-        // console.warn("Using default URL or invalid");
-    }
-
+    unlockAudio();
     clearQueueAndStopSpeech();
-    // FIXED: String literal
     setConnectionState('CONNECTING');
     setError(null);
     setTranscriptions([]);
@@ -236,20 +293,24 @@ const App: React.FC = () => {
       websocketRef.current = ws;
 
       ws.onopen = () => {
-        // FIXED: String literal
         setConnectionState('CONNECTED');
+        // Initial handshake: Join as listener with language preference
         ws.send(JSON.stringify({
-            url: twitterUrl,
-            source_language: sourceLanguage.name,
+            action: 'join',
             target_language: targetLanguage.name,
-            src_code: sourceLanguage.code,
-            tgt_code: targetLanguage.code
         }));
       };
 
       ws.onmessage = async (event) => {
         try {
             const data = JSON.parse(event.data);
+            
+            if (data.type === 'meta') {
+                // If title is received, update it. If empty string is sent, it means stream stopped.
+                setSessionTitle(data.title || '');
+                return;
+            }
+
             if (data.type === 'history') {
                 const historyItems = data.data.map((item: any) => ({
                     id: 'hist-' + Math.random().toString(36),
@@ -258,7 +319,6 @@ const App: React.FC = () => {
                     timestamp: item.timestamp ? new Date(item.timestamp * 1000) : new Date()
                 }));
                 setTranscriptions(historyItems);
-                // Don't auto-speak history
                 return;
             }
             if (data.error) {
@@ -283,18 +343,15 @@ const App: React.FC = () => {
 
       ws.onerror = () => {
         setError("Connection Failed. Check Server.");
-        // FIXED: String literal
         setConnectionState('ERROR');
       };
 
       ws.onclose = () => {
-        // FIXED: String literal logic
         if (connectionState === 'CONNECTED') setConnectionState('DISCONNECTED');
       };
 
     } catch (netErr: any) {
       setError(netErr.message);
-      // FIXED: String literal
       setConnectionState('DISCONNECTED');
     }
   };
@@ -302,30 +359,88 @@ const App: React.FC = () => {
   const stopSession = () => {
     if (websocketRef.current) { websocketRef.current.close(); websocketRef.current = null; }
     clearQueueAndStopSpeech();
-    // FIXED: String literal
     setConnectionState('DISCONNECTED');
+    setSessionTitle('');
   };
 
   const toggleSession = () => {
-    // FIXED: String literal logic
     if (connectionState === 'CONNECTED' || connectionState === 'CONNECTING') stopSession();
     else connectToBackend();
+  };
+
+  const handleStartBroadcast = () => {
+      if (!websocketRef.current || connectionState !== 'CONNECTED') {
+          alert("Please ESTABLISH LINK first! Connect to the server before starting broadcast.");
+          return;
+      }
+      if (!adminUrl) {
+          alert("Enter a URL!");
+          return;
+      }
+      // Send Stream Command through existing connection
+      websocketRef.current.send(JSON.stringify({
+          action: 'stream',
+          url: adminUrl
+      }));
+      
+      // UX Improvement: Inform user that the process has started and they should NOT disconnect
+      alert(`BROADCAST SIGNAL SENT!\n\nTarget: ${adminUrl}\n\nSystem is tuning in... \nDO NOT DISCONNECT OR TERMINATE LINK.`);
+      // Optional: Close modal automatically to show the "ON AIR" status
+      setShowSettings(false);
   };
 
   const toggleMute = () => {
       setIsMuted(!isMuted);
       if (!isMuted) clearQueueAndStopSpeech();
-      else speechQueue.current = [];
+      else {
+          speechQueue.current = [];
+          unlockAudio();
+      }
   };
 
-  // Init Voices
-  useEffect(() => { if (window.speechSynthesis) window.speechSynthesis.getVoices(); }, []);
+  const handleDownloadTranscript = () => {
+      if (transcriptions.length === 0) {
+          alert("No transcript data to save yet.");
+          return;
+      }
+
+      let content = `XSPACE TRANSCRIPT LOG - ${new Date().toLocaleString()}\n`;
+      content += `SESSION: ${sessionTitle || 'Unknown'}\n`;
+      content += `LANG: ${targetLanguage.name}\n`;
+      content += `-------------------------------------------\n\n`;
+      
+      transcriptions.forEach(item => {
+          const time = item.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+          const speaker = item.sender === 'user' ? 'AUDIO' : 'TRANS';
+          content += `[${time}] ${speaker}: ${item.text}\n`;
+      });
+
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `xspace_log_${Date.now()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      // Delay revocation for mobile browsers
+      setTimeout(() => {
+          URL.revokeObjectURL(url);
+      }, 500);
+  };
+
+  const isErrorState = sessionTitle.includes("ERROR");
+
+  if (!isHumanVerified) {
+    return <SecurityCheck onVerified={() => setIsHumanVerified(true)} isDarkMode={isDarkMode} />;
+  }
 
   return (
-    <div className={`h-screen ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none overflow-hidden transition-colors duration-300`}>
+    <div className={`h-[100dvh] ${theme.bg} p-2 md:p-4 flex flex-col md:flex-row gap-4 font-['VT323'] text-xl leading-none overflow-hidden transition-colors duration-300`}>
       
       {/* --- SIDEBAR (FIXED) --- */}
-      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="w-full md:w-96 shrink-0 h-auto md:h-full flex flex-col">
+      <RetroWindow title="XSpace Control" isDark={isDarkMode} className="w-full md:w-96 shrink-0 h-auto md:h-full flex flex-col max-h-[40vh] md:max-h-full">
         <div className="p-4 space-y-6 overflow-y-auto flex-1 custom-scrollbar">
             
             {/* Header / Theme Switch */}
@@ -339,9 +454,9 @@ const App: React.FC = () => {
                 </button>
             </div>
 
-            {/* Developer ID Card */}
+            {/* Developer ID Card - Secret Menu Trigger */}
             <div className={`border-2 p-3 flex gap-4 items-center relative group select-none cursor-pointer
-                ${isDarkMode ? 'bg-gray-900 border-green-500' : 'bg-[#e0e0e0] border-t-white border-l-white border-b-black border-r-black'}`}
+                ${isDarkMode ? 'bg-black border-green-500' : 'bg-[#e0e0e0] border-t-white border-l-white border-b-black border-r-black'}`}
                 onClick={handleAvatarClick}
             >
                 <div className={`w-16 h-16 shrink-0 overflow-hidden relative border-2 ${isDarkMode ? 'border-green-500' : 'border-black'}`}>
@@ -353,48 +468,49 @@ const App: React.FC = () => {
                     />
                 </div>
                 <div className="flex flex-col">
-                    <span className={`font-bold text-sm tracking-widest ${theme.mutedText}`}>DEVELOPER ID</span>
+                    <span className={`font-bold text-sm tracking-widest ${isDarkMode ? 'text-green-600' : 'text-gray-800'}`}>DEVELOPER ID</span>
                     <a href="https://x.com/mixon_here" target="_blank" className={`font-bold text-xl hover:underline ${isDarkMode ? 'text-green-400' : 'text-[#000080]'}`}>@mixon_here</a>
-                    </div>
+                    <span className={`text-xs uppercase font-bold ${isDarkMode ? 'text-green-700' : 'text-gray-700'}`}>Subscribe to Support</span>
+                </div>
             </div>
 
-            {/* Status */}
-            <fieldset className={`border-2 p-2 pt-1 mt-2 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
-                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>System Status</legend>
-                <div className="flex items-center gap-3">
-                    <div className={`w-4 h-4 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
+            {/* Status / Session Info */}
+            <fieldset className={`border-2 p-2 pt-1 mt-2 w-full min-w-0 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
+                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Status</legend>
+                <div className="flex items-center gap-3 mb-2">
+                    <div className={`w-4 h-4 shrink-0 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
                     <span className={`uppercase tracking-widest ${theme.text}`}>
-                        {connectionState === 'CONNECTED' ? 'RECEIVING STREAM' : 'DISCONNECTED'}
+                        {connectionState === 'CONNECTED' ? 'ONLINE' : 'OFFLINE'}
                     </span>
                 </div>
+                
+                <div className={`border-2 border-inset p-2 overflow-hidden w-full relative ${isDarkMode ? 'bg-black border-green-800' : 'bg-black border-gray-600'}`}>
+                    {connectionState === 'CONNECTED' ? (
+                        <div className={`whitespace-nowrap ${sessionTitle ? 'animate-marquee' : 'text-center'} ${isErrorState ? 'text-red-500 font-bold' : (isDarkMode ? 'text-green-500' : 'text-[#00ff00]')}`}>
+                            {sessionTitle ? (isErrorState ? sessionTitle : `>>> ON AIR: ${sessionTitle} <<<`) : ">>> WAITING FOR BROADCAST <<<"}
+                        </div>
+                    ) : (
+                        <div className="text-red-500 text-center">NO SIGNAL</div>
+                    )}
+                </div>
+                <style>{`
+                    @keyframes marquee {
+                        0% { transform: translateX(100%); }
+                        100% { transform: translateX(-100%); }
+                    }
+                    .animate-marquee {
+                        display: inline-block;
+                        padding-left: 100%;
+                        animation: marquee 15s linear infinite;
+                    }
+                `}</style>
             </fieldset>
 
             {/* Config */}
             <div className={`space-y-4 ${theme.text}`}>
-                <div>
-                    <label className="block mb-1">Target URL:</label>
-                    <RetroInput 
-                        isDark={isDarkMode}
-                        value={twitterUrl}
-                        onChange={(e) => setTwitterUrl(e.target.value)}
-                        placeholder="https://x.com/..."
-                        disabled={connectionState === 'CONNECTED'}
-                    />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2">
                     <div>
-                        <label className="block mb-1">Input:</label>
-                        <RetroSelect 
-                            isDark={isDarkMode}
-                            value={sourceLanguage.code}
-                            onChange={(e) => setSourceLanguage(LANGUAGES.find(l => l.code === e.target.value) || LANGUAGES[0])}
-                            disabled={connectionState === 'CONNECTED'}
-                        >
-                            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.flag} {l.name}</option>)}
-                        </RetroSelect>
-                    </div>
-                    <div>
-                        <label className="block mb-1">Output:</label>
+                        <label className="block mb-1">Target Language:</label>
                         <RetroSelect 
                             isDark={isDarkMode}
                             value={targetLanguage.code}
@@ -407,17 +523,40 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            {/* Audio Controls */}
+            {/* Audio Config */}
             <fieldset className={`border-2 p-2 pt-1 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
-                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Audio Config</legend>
+                <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Audio</legend>
                 <div className={`flex items-center justify-between mb-2 ${theme.text}`}>
-                    <span>Voice:</span>
+                    <span>Sound:</span>
                     <RetroButton isDark={isDarkMode} onClick={toggleMute} className="flex items-center gap-2">
                         {isMuted ? <VolumeX size={16}/> : <Volume2 size={16}/>}
                         {isMuted ? "MUTED" : "ON"}
                     </RetroButton>
                 </div>
-                <div className={isMuted ? "opacity-30 pointer-events-none" : ""}>
+                
+                <div className={`space-y-2 ${isMuted ? "opacity-30 pointer-events-none" : ""}`}>
+                    {/* Voice Selector */}
+                    <div>
+                         <label className={`block mb-1 text-sm ${theme.text}`}>Voice:</label>
+                         <RetroSelect
+                            isDark={isDarkMode}
+                            value={selectedVoiceURI}
+                            onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                            disabled={availableVoices.length === 0}
+                         >
+                            {availableVoices.length > 0 ? (
+                                availableVoices.map(v => (
+                                    <option key={v.voiceURI} value={v.voiceURI}>
+                                        {v.name.length > 25 ? v.name.substring(0, 25) + '...' : v.name}
+                                    </option>
+                                ))
+                            ) : (
+                                <option>Default Device Voice</option>
+                            )}
+                         </RetroSelect>
+                    </div>
+
+                    {/* Speed Slider Restored */}
                     <div className={`flex justify-between text-sm ${theme.text}`}>
                         <span>Speed</span>
                         <span>{playbackSpeed.toFixed(1)}x</span>
@@ -450,15 +589,44 @@ const App: React.FC = () => {
       </RetroWindow>
 
       {/* --- MAIN CHAT --- */}
-      <RetroWindow title={`Stream Output - ${targetLanguage.name.toUpperCase()}`} isDark={isDarkMode} className="flex-1 min-h-0">
+      <RetroWindow 
+        title={`Stream Output - ${targetLanguage.name.toUpperCase()}`} 
+        isDark={isDarkMode} 
+        className="flex-1 min-h-0"
+        actions={
+            <button 
+                onClick={handleDownloadTranscript} 
+                className={`p-1 mr-2 ${isDarkMode ? 'hover:text-white' : 'hover:bg-gray-300'}`}
+                title="Save Log to Disk"
+            >
+                <Save size={18} />
+            </button>
+        }
+      >
           <div className={`flex-1 p-4 overflow-y-auto relative custom-scrollbar ${isDarkMode ? 'bg-black text-green-500' : 'bg-white text-black border-2 border-inset border-gray-400'}`}
                ref={chatContainerRef}
                onScroll={handleScroll}
           >
                {transcriptions.length === 0 && (
                    <div className="h-full flex flex-col items-center justify-center opacity-50">
-                       <Terminal size={64} />
-                       <p className="mt-4 text-2xl animate-pulse">AWAITING DATA STREAM...</p>
+                       <Radio size={64} className={`mb-4 ${connectionState === 'CONNECTED' ? 'animate-pulse' : ''} ${isErrorState ? 'text-red-500' : ''}`} />
+                       
+                       {/* LOGIC FOR STATUS MESSAGES */}
+                       <p className={`text-2xl ${isErrorState ? 'text-red-500' : ''}`}>
+                           {connectionState === 'CONNECTED' 
+                               ? (sessionTitle 
+                                   ? (isErrorState ? "BROADCAST ERROR" : "TUNING IN...") 
+                                   : "NO ACTIVE BROADCAST") 
+                               : "WAITING FOR CONNECTION..."}
+                       </p>
+                       
+                       <p className="text-sm opacity-60 mt-2 text-center max-w-sm">
+                           {connectionState === 'CONNECTED' 
+                                ? (sessionTitle 
+                                    ? (isErrorState ? "The Admin provided an invalid or expired Twitter Space URL." : "Receiving translation data...") 
+                                    : "Server connected. Waiting for admin to start the stream.")
+                                : "Click 'Establish Link' to connect to the server."}
+                       </p>
                    </div>
                )}
 
@@ -469,7 +637,7 @@ const App: React.FC = () => {
                             <span className="font-bold font-mono">
                                 [{item.timestamp.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'})}]
                             </span>
-                            <span className="font-bold tracking-wider">{item.sender === 'user' ? 'SOURCE AUDIO' : 'TRANSLATED TEXT'}</span>
+                            <span className="font-bold tracking-wider">{item.sender === 'user' ? 'SOURCE' : 'TRANSLATION'}</span>
                         </div>
                         <div className="flex gap-3 items-start mt-2">
                             {item.sender === 'model' && (
@@ -487,7 +655,6 @@ const App: React.FC = () => {
                    )
                })}
                
-               {/* Jump to Live Button */}
                {showScrollBottom && (
                    <div className="sticky bottom-4 left-0 right-0 flex justify-center pointer-events-none">
                        <button 
@@ -508,7 +675,30 @@ const App: React.FC = () => {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <RetroWindow title="Admin Console (ROOT)" isDark={isDarkMode} className="w-full max-w-lg" onClose={() => setShowSettings(false)}>
+                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.2 beta</div>
                 <div className={`p-6 space-y-6 ${theme.text}`}>
+                    
+                    {/* BROADCAST CONTROL RESTORED HERE */}
+                    <div className="border-b pb-4 mb-4 border-gray-600">
+                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Lock size={20}/> BROADCAST CONTROL</h3>
+                        <label className="block mb-1">Target URL (Twitter Space):</label>
+                        <RetroInput 
+                            isDark={isDarkMode}
+                            value={adminUrl}
+                            onChange={(e) => setAdminUrl(e.target.value)}
+                            placeholder="https://x.com/..."
+                        />
+                         <div className="mt-4 flex justify-end">
+                             <RetroButton 
+                                isDark={isDarkMode} 
+                                onClick={handleStartBroadcast}
+                                className="bg-red-600 text-white border-red-800 hover:bg-red-700"
+                            >
+                                START BROADCAST
+                            </RetroButton>
+                        </div>
+                    </div>
+
                     <div>
                         <p className="mb-2 uppercase font-bold">WebSocket Endpoint:</p>
                         <RetroInput 
@@ -517,11 +707,10 @@ const App: React.FC = () => {
                             onChange={(e) => setServerUrl(e.target.value)}
                             className="w-full font-mono text-lg"
                         />
-                        <p className="text-sm opacity-60 mt-1">Must start with wss:// for secure connections.</p>
                     </div>
                     <div className="flex justify-end gap-4 pt-4 border-t border-gray-600">
                         <RetroButton isDark={isDarkMode} onClick={() => setShowServerHelp(true)}>Get Server Script</RetroButton>
-                        <RetroButton isDark={isDarkMode} onClick={() => setShowSettings(false)}>Save Config</RetroButton>
+                        <RetroButton isDark={isDarkMode} onClick={() => setShowSettings(false)}>Close</RetroButton>
                     </div>
                 </div>
             </RetroWindow>
@@ -533,6 +722,5 @@ const App: React.FC = () => {
     </div>
   );
 };
-
 
 export default App;
