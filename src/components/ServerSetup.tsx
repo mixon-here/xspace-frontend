@@ -12,12 +12,12 @@ const ServerSetup: React.FC<ServerSetupProps> = ({ onClose }) => {
     return `#!/bin/bash
 
 # ==========================================
-# XSPACE BROADCAST SERVER (v8.1 - BUGFIX)
+# XSPACE BROADCAST SERVER (v9.1 - RATE LIMIT FIX)
 # Architecture: RAM Cache + Disk Backup
 # Features:
-# 1. Trigger-Based Translation Caching.
-# 2. Real-time Listener Statistics Broadcast.
-# 3. Detailed Console Logging (IP/Lang).
+# 1. FIXED: Rate Limits (Multi-Key Support).
+# 2. MODEL: Switched to Llama-3.1-8b (Faster).
+# 3. FIXED: Language Mix-up Bug.
 # ==========================================
 
 echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
@@ -64,7 +64,9 @@ pip install --default-timeout=100 --retries 5 -U groq aiohttp fastapi uvicorn yt
 echo ""
 echo -e "\\e[1;33m>>> SETUP \\e[0m"
 if [ -z "$GROQ_KEY" ]; then
-    read -p "Enter GROQ_API_KEY: " GROQ_KEY
+    echo "Enter GROQ_API_KEY(s)."
+    echo "Tip: You can enter multiple keys separated by commas (key1,key2,key3) to avoid Rate Limits."
+    read -p "Keys: " GROQ_KEY
 fi
 if [ -z "$NGROK_TOKEN" ]; then
     read -p "Enter NGROK_AUTHTOKEN: " NGROK_TOKEN
@@ -85,14 +87,17 @@ import struct
 import time
 import signal
 from typing import List, Dict, Set
-from groq import AsyncGroq
+from groq import AsyncGroq, RateLimitError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import uvicorn
 
 # --- CONFIGURATION ---
-API_KEY = "\${GROQ_KEY}"
+RAW_KEYS = "\${GROQ_KEY}"
+API_KEYS = [k.strip() for k in RAW_KEYS.split(",") if k.strip()]
+CURRENT_KEY_INDEX = 0
+
 BUFFER_SECONDS = 30
 SAMPLE_RATE = 16000
 CHANNELS = 1
@@ -100,7 +105,8 @@ SAMPWIDTH = 2
 BUFFER_SIZE = SAMPLE_RATE * CHANNELS * SAMPWIDTH * BUFFER_SECONDS 
 MAX_HISTORY_ITEMS = 3000
 
-client = AsyncGroq(api_key=API_KEY)
+# Initialize clients for rotation
+clients = [AsyncGroq(api_key=k) for k in API_KEYS]
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -114,22 +120,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def get_working_client():
+    global CURRENT_KEY_INDEX
+    return clients[CURRENT_KEY_INDEX]
+
+async def rotate_key():
+    global CURRENT_KEY_INDEX
+    if len(clients) > 1:
+        CURRENT_KEY_INDEX = (CURRENT_KEY_INDEX + 1) % len(clients)
+        logger.warning(f"🔄 RATE LIMIT HIT! Switching to API Key #{CURRENT_KEY_INDEX + 1}")
+    else:
+        logger.error("❌ RATE LIMIT HIT! No other keys available. Waiting 5s...")
+        await asyncio.sleep(5)
+
 async def translate_text(text: str, target_lang: str):
-    """Standalone translation helper"""
+    """Standalone translation helper with Key Rotation"""
     if target_lang == "English": return text
-    try:
-        chat = await client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": f"Translate this to {target_lang}. Return ONLY text."},
-                {"role": "user", "content": text}
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.3, max_tokens=1024,
-        )
-        return chat.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Translation error: {e}")
-        return text
+    
+    # Retry logic for rate limits
+    for attempt in range(len(clients) + 1): 
+        try:
+            client = await get_working_client()
+            chat = await client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": f"Translate this to {target_lang}. Return ONLY text."},
+                    {"role": "user", "content": text}
+                ],
+                # Switched to faster model to save tokens and reduce latency
+                model="llama-3.1-8b-instant", 
+                temperature=0.3, max_tokens=1024,
+            )
+            return chat.choices[0].message.content
+        except RateLimitError:
+            await rotate_key()
+            continue # Try again with new key
+        except Exception as e:
+            logger.error(f"Translation error ({target_lang}): {e}")
+            return text
+            
+    return text # Return original if all keys fail
 
 class ConnectionManager:
     def __init__(self):
@@ -137,7 +166,6 @@ class ConnectionManager:
         self.history: List[Dict] = [] 
 
     async def connect(self, websocket: WebSocket, target_lang: str = "English"):
-        # Removed redundant websocket.accept() to fix double-accept error
         self.active_connections.append((websocket, target_lang))
         
         # Detailed Logging
@@ -338,7 +366,9 @@ class AudioStreamProcessor:
 
     async def transcribe_and_distribute(self, wav_data, filename):
         try:
-            transcription = await client.audio.transcriptions.create(
+            # Note: We always use the FIRST key for transcription (Whisper).
+            # Transcription consumes fewer tokens than translation, so one key is usually enough.
+            transcription = await clients[0].audio.transcriptions.create(
                 file=("audio.wav", wav_data), 
                 model="whisper-large-v3", 
                 response_format="json"
@@ -348,23 +378,18 @@ class AudioStreamProcessor:
             if text and len(text) > 5:
                 logger.info(f"🗣️ TRANSCRIPT: {text[:40]}...")
                 
-                # 1. Check ACTIVE listeners
                 needed_langs = manager.get_needed_languages()
                 translations_cache = {}
                 
-                # 2. Trigger API calls ONLY for languages currently needed
-                tasks = []
-                for lang in needed_langs:
-                    if lang != "English":
-                        tasks.append(translate_text(text, lang))
+                target_langs = [l for l in needed_langs if l != "English"]
+                
+                tasks = [translate_text(text, lang) for lang in target_langs]
                 
                 if tasks:
                     results = await asyncio.gather(*tasks)
-                    non_english_langs = [l for l in needed_langs if l != "English"]
-                    for i, lang in enumerate(non_english_langs):
+                    for i, lang in enumerate(target_langs):
                         translations_cache[lang] = results[i]
                 
-                # 3. Cache & Broadcast
                 manager.add_history(text, translations_cache)
                 await manager.broadcast_result(text, translations_cache)
                 
@@ -384,7 +409,6 @@ async def websocket_endpoint(websocket: WebSocket):
             action = data.get("action", "join")
             
             if action == "join":
-                # Remove existing same connection if any to prevent duplicates in logic (though websocket object is unique)
                 manager.active_connections = [c for c in manager.active_connections if c[0] != websocket]
                 
                 target_lang = data.get("target_language", "English")
@@ -420,7 +444,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        await manager.broadcast_stats() # Update stats on disconnect
+        await manager.broadcast_stats()
     except Exception as e:
         logger.error(f"WS Connection Error: {e}")
         manager.disconnect(websocket)
