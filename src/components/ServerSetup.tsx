@@ -9,15 +9,15 @@ const ServerSetup: React.FC<ServerSetupProps> = ({ onClose }) => {
   const [copied, setCopied] = useState(false);
 
   const getInstallScript = () => {
+    // NOTE: using a template string inside a template string requires careful escaping of backslashes and $
     return `#!/bin/bash
 
 # ==========================================
-# XSPACE BROADCAST SERVER (v9.1 - RATE LIMIT FIX)
-# Architecture: RAM Cache + Disk Backup
+# XSPACE BROADCAST SERVER (v10.0 - GAME)
 # Features:
-# 1. FIXED: Rate Limits (Multi-Key Support).
-# 2. MODEL: Switched to Llama-3.1-8b (Faster).
-# 3. FIXED: Language Mix-up Bug.
+# 1. LOGS: Detailed System Monitor (RAM/CPU/CONNS)
+# 2. GAME: SQLite Leaderboard for Tetris
+# 3. WATCHDOG: Keeps server healthy.
 # ==========================================
 
 echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
@@ -30,7 +30,7 @@ pkill -f "bash start.sh"
 # 2. SYSTEM DEPENDENCIES
 echo "Updating system..."
 sudo apt-get update -qq
-sudo apt-get install -y ffmpeg curl unzip build-essential -qq
+sudo apt-get install -y ffmpeg curl unzip build-essential sqlite3 -qq
 
 # 3. NGROK
 if ! command -v ngrok &> /dev/null; then
@@ -58,7 +58,8 @@ conda activate xspace
 # 6. LIBRARIES
 echo "Installing Python libraries..."
 pip uninstall google-genai google-generativeai -y -q
-pip install --default-timeout=100 --retries 5 -U groq aiohttp fastapi uvicorn yt-dlp websockets curl-cffi
+# Installing psutil, but server will survive without it
+pip install --default-timeout=100 --retries 5 -U groq aiohttp fastapi uvicorn yt-dlp websockets curl-cffi psutil pydantic
 
 # 7. CONFIG
 echo ""
@@ -85,13 +86,20 @@ import json
 import logging
 import struct
 import time
-import signal
-from typing import List, Dict, Set
+import sqlite3
+from typing import List, Dict, Set, Optional
+from pydantic import BaseModel
 from groq import AsyncGroq, RateLimitError
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
 import uvicorn
+
+# Try importing psutil safely
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 # --- CONFIGURATION ---
 RAW_KEYS = "\${GROQ_KEY}"
@@ -105,12 +113,45 @@ SAMPWIDTH = 2
 BUFFER_SIZE = SAMPLE_RATE * CHANNELS * SAMPWIDTH * BUFFER_SECONDS 
 MAX_HISTORY_ITEMS = 3000
 
+# --- ANTI-CHEAT & GAME CONFIG ---
+CLIENT_SECRET = "XSPACE_CLIENT_SECRET_98" # Must match client
+ADMIN_SECRET_KEY = "ADMIN_SECRET_KEY"     # For deleting DB
+MAX_PPS = 1000 # Max points per second theoretically possible in Tetris (loose limit)
+
+# --- WATCHDOG CONFIG ---
+MAX_BROADCAST_DURATION = 3 * 60 * 60  # 3 Hours (Hard Limit)
+SILENCE_TIMEOUT = 10 * 60             # 10 Minutes (No audio detected)
+
 # Initialize clients for rotation
 clients = [AsyncGroq(api_key=k) for k in API_KEYS]
 
-# Configure Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure Logging (File + Console)
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("xspace.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger("xspace")
+
+# --- DATABASE SETUP ---
+DB_FILE = "xspace.db"
+
+def init_db():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS scores
+                     (name TEXT, score INTEGER, timestamp REAL, signature TEXT)''')
+        conn.commit()
+        conn.close()
+        logger.info("💾 Database Initialized")
+    except Exception as e:
+        logger.error(f"DB Init Failed: {e}")
+
+init_db()
 
 app = FastAPI()
 app.add_middleware(
@@ -119,6 +160,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- MODELS ---
+class ScoreSubmission(BaseModel):
+    name: str
+    score: int
+    start_time: float
+    signature: str
+
+# --- SYSTEM MONITOR ---
+async def monitor_system():
+    """Logs system resource usage every 30 seconds to console"""
+    while True:
+        try:
+            msg = "✅ HEARTBEAT: "
+            if psutil:
+                mem = psutil.virtual_memory()
+                cpu = psutil.cpu_percent()
+                msg += f"RAM={mem.percent}% | CPU={cpu}% | "
+            
+            # Connections
+            conns = len(manager.active_connections) if 'manager' in globals() else 0
+            msg += f"Listeners={conns}"
+            
+            logger.info(msg)
+            
+            await asyncio.sleep(30)
+        except Exception as e:
+            await asyncio.sleep(30)
 
 async def get_working_client():
     global CURRENT_KEY_INDEX
@@ -134,10 +203,8 @@ async def rotate_key():
         await asyncio.sleep(5)
 
 async def translate_text(text: str, target_lang: str):
-    """Standalone translation helper with Key Rotation"""
     if target_lang == "English": return text
     
-    # Retry logic for rate limits
     for attempt in range(len(clients) + 1): 
         try:
             client = await get_working_client()
@@ -146,19 +213,18 @@ async def translate_text(text: str, target_lang: str):
                     {"role": "system", "content": f"Translate this to {target_lang}. Return ONLY text."},
                     {"role": "user", "content": text}
                 ],
-                # Switched to faster model to save tokens and reduce latency
                 model="llama-3.1-8b-instant", 
                 temperature=0.3, max_tokens=1024,
             )
             return chat.choices[0].message.content
         except RateLimitError:
             await rotate_key()
-            continue # Try again with new key
+            continue
         except Exception as e:
             logger.error(f"Translation error ({target_lang}): {e}")
             return text
             
-    return text # Return original if all keys fail
+    return text
 
 class ConnectionManager:
     def __init__(self):
@@ -168,7 +234,6 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, target_lang: str = "English"):
         self.active_connections.append((websocket, target_lang))
         
-        # Detailed Logging
         client_ip = "Unknown"
         if websocket.client:
             client_ip = websocket.client.host
@@ -176,9 +241,9 @@ class ConnectionManager:
         
         await self.broadcast_stats()
 
-    def disconnect(self, websocket: WebSocket):
+    def disconnect(self, websocket: WebSocket, client_ip: str = "Unknown"):
         self.active_connections = [c for c in self.active_connections if c[0] != websocket]
-        logger.info(f"👋 DISCONNECTED | REMAINING={len(self.active_connections)}")
+        logger.info(f"👋 DISCONNECTED: IP={client_ip} | REMAINING={len(self.active_connections)}")
         pass
 
     def get_needed_languages(self) -> Set[str]:
@@ -216,7 +281,7 @@ class ConnectionManager:
 
     def clear_history(self):
         self.history = []
-        logger.info("🧹 RAM History cleared for new session.")
+        logger.info("🧹 RAM History CLEARED.")
 
     async def broadcast_result(self, original: str, translations: Dict[str, str]):
         disconnected = []
@@ -260,6 +325,11 @@ class AudioStreamProcessor:
         self.audio_queue = asyncio.Queue()
         self.ffmpeg_process = None
         self.processing_task = None
+        self.watchdog_task = None
+        
+        # Watchdog Stats
+        self.start_time = 0
+        self.last_activity_time = 0
         
     async def get_stream_info(self, url: str):
         ydl_opts = {
@@ -280,9 +350,11 @@ class AudioStreamProcessor:
 
     async def stop_stream(self):
         if self.is_running:
-            logger.info("🛑 STOPPING CURRENT STREAM...")
+            logger.info("🛑 STOPPING CURRENT STREAM & CLEANING RESOURCES...")
         
         self.is_running = False
+        
+        # Clear Data
         manager.clear_history() 
         
         if self.ffmpeg_process:
@@ -298,11 +370,15 @@ class AudioStreamProcessor:
             except asyncio.CancelledError: pass
             self.processing_task = None
 
+        if self.watchdog_task:
+            self.watchdog_task.cancel()
+            self.watchdog_task = None
+
         self.audio_queue = asyncio.Queue() 
         self.current_url = None
         self.current_title = ""
-        await manager.broadcast_meta("")
-        logger.info("✅ STREAM STOPPED.")
+        await manager.broadcast_meta("") # Clears title on client side
+        logger.info("✅ STREAM STOPPED & RAM FREED.")
 
     async def start_stream(self, twitter_url: str):
         await self.stop_stream()
@@ -320,11 +396,35 @@ class AudioStreamProcessor:
         self.current_url = twitter_url
         self.current_title = title
         
+        # Reset Watchdog timers
+        self.start_time = time.time()
+        self.last_activity_time = time.time()
+        
         logger.info(f"🎙️ ON AIR: {title}")
         await manager.broadcast_meta(title)
 
         asyncio.create_task(self.run_ffmpeg(stream_url))
         self.processing_task = asyncio.create_task(self.process_audio())
+        self.watchdog_task = asyncio.create_task(self.watchdog_loop())
+
+    async def watchdog_loop(self):
+        """Monitors stream health and auto-stops if necessary"""
+        logger.info("👀 WATCHDOG: Started monitoring stream duration and silence.")
+        while self.is_running:
+            await asyncio.sleep(60) # Check every minute
+            now = time.time()
+            
+            # Rule 1: Max Duration (3 Hours)
+            if now - self.start_time > MAX_BROADCAST_DURATION:
+                logger.warning("⏰ WATCHDOG: Max broadcast duration (3h) reached. Auto-stopping.")
+                await self.stop_stream()
+                break
+                
+            # Rule 2: Silence Detection (10 Minutes)
+            if now - self.last_activity_time > SILENCE_TIMEOUT:
+                logger.warning("⏰ WATCHDOG: No audio processed for 10m. Auto-stopping.")
+                await self.stop_stream()
+                break
 
     async def run_ffmpeg(self, stream_url: str):
         try:
@@ -336,6 +436,8 @@ class AudioStreamProcessor:
                 chunk = await self.ffmpeg_process.stdout.read(4096)
                 if not chunk: break
                 await self.audio_queue.put(chunk)
+                # Update activity time since we received data
+                self.last_activity_time = time.time()
         except Exception as e:
             if self.is_running: logger.error(f"FFmpeg error: {e}")
 
@@ -366,8 +468,6 @@ class AudioStreamProcessor:
 
     async def transcribe_and_distribute(self, wav_data, filename):
         try:
-            # Note: We always use the FIRST key for transcription (Whisper).
-            # Transcription consumes fewer tokens than translation, so one key is usually enough.
             transcription = await clients[0].audio.transcriptions.create(
                 file=("audio.wav", wav_data), 
                 model="whisper-large-v3", 
@@ -376,6 +476,9 @@ class AudioStreamProcessor:
             text = transcription.text.strip()
 
             if text and len(text) > 5:
+                # Update activity time since we got a valid transcript
+                self.last_activity_time = time.time()
+                
                 logger.info(f"🗣️ TRANSCRIPT: {text[:40]}...")
                 
                 needed_langs = manager.get_needed_languages()
@@ -400,9 +503,84 @@ class AudioStreamProcessor:
 
 processor = AudioStreamProcessor()
 
+# --- HTTP ENDPOINTS (GAME) ---
+
+@app.get("/scores")
+def get_scores():
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT name, score, timestamp FROM scores ORDER BY score DESC LIMIT 50")
+        rows = c.fetchall()
+        conn.close()
+        return [{"name": r[0], "score": r[1], "timestamp": r[2]} for r in rows]
+    except Exception as e:
+        logger.error(f"DB Read Error: {e}")
+        return []
+
+@app.post("/scores")
+def submit_score(sub: ScoreSubmission):
+    # LEVEL 1 SECURITY: Verify Hash
+    msg = f"{sub.name}{sub.score}{CLIENT_SECRET}"
+    expected_hash = 0
+    for char in msg:
+        expected_hash = ((expected_hash << 5) - expected_hash) + ord(char)
+        expected_hash = expected_hash & expected_hash # 32bit int
+    
+    if str(expected_hash) != sub.signature:
+        logger.warning(f"CHEAT ATTEMPT: Invalid Signature from {sub.name}")
+        return {"status": "rejected", "reason": "signature_mismatch"}
+
+    # LEVEL 2 SECURITY: Verify Time vs Score
+    duration = time.time() - sub.start_time
+    if duration <= 0: duration = 1
+    pps = sub.score / duration
+    
+    if pps > MAX_PPS and sub.score > 500: # Only check significant scores
+        logger.warning(f"CHEAT ATTEMPT: Impossible speed ({pps} pps) from {sub.name}")
+        return {"status": "rejected", "reason": "impossible_speed"}
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO scores VALUES (?, ?, ?, ?)", (sub.name, sub.score, time.time(), sub.signature))
+        conn.commit()
+        conn.close()
+        logger.info(f"🏆 NEW SCORE: {sub.name} - {sub.score}")
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"DB Write Error: {e}")
+        raise HTTPException(status_code=500)
+
+@app.delete("/scores")
+def clear_scores(key: str):
+    if key != ADMIN_SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM scores")
+        conn.commit()
+        conn.close()
+        logger.info("🧹 DATABASE CLEARED BY ADMIN")
+        return {"status": "cleared"}
+    except Exception as e:
+        return {"status": "error", "msg": str(e)}
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the background monitor
+    asyncio.create_task(monitor_system())
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    
+    # Capture IP immediately
+    client_ip = "Unknown"
+    if websocket.client:
+        client_ip = websocket.client.host
+        
     try:
         while True:
             data = await websocket.receive_json()
@@ -439,15 +617,15 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "stream":
                 url = data.get("url")
                 if url:
-                    logger.info(f"🔴 ADMIN COMMAND: START BROADCAST | URL: {url}")
+                    logger.info(f"🔴 ADMIN COMMAND: START BROADCAST | IP={client_ip} | URL: {url}")
                     asyncio.create_task(processor.start_stream(url))
                     
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, client_ip)
         await manager.broadcast_stats()
     except Exception as e:
         logger.error(f"WS Connection Error: {e}")
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, client_ip)
         await manager.broadcast_stats()
 
 if __name__ == "__main__":
@@ -472,6 +650,7 @@ echo "sleep 3" >> start.sh
 # Infinite Restart Loop
 echo "while true; do" >> start.sh
 echo "  echo 'Starting XSpace Server...'" >> start.sh
+echo "  # Removed -u flag to prevent buffering issues if any" >> start.sh
 echo "  python xspace.py" >> start.sh
 echo "  echo '⚠️ Server stopped! Restarting in 3 seconds... (Press Ctrl+C to stop)'" >> start.sh
 echo "  sleep 3" >> start.sh
