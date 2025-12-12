@@ -90,17 +90,17 @@ const RetroSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { is
 };
 
 const App: React.FC = () => {
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isHumanVerified, setIsHumanVerified] = useState(false);
+  // PERSISTENT STATE INITIALIZATION
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem('xspace_theme') === 'dark');
+  const [serverUrl, setServerUrl] = useState<string>(() => localStorage.getItem('xspace_server_url') || 'wss://fallible-tenantless-pa.ngrok-free.dev/ws');
+  const [adminUrl, setAdminUrl] = useState<string>(() => localStorage.getItem('xspace_admin_url') || '');
 
+  const [isHumanVerified, setIsHumanVerified] = useState(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('DISCONNECTED');
   const [transcriptions, setTranscriptions] = useState<TranscriptionItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   
-  // Settings
-  const [adminUrl, setAdminUrl] = useState<string>(''); 
   const [sessionTitle, setSessionTitle] = useState<string>(''); 
-  const [serverUrl, setServerUrl] = useState<string>('wss://fallible-tenantless-pa.ngrok-free.dev/ws');
   
   // Stats
   const [serverStats, setServerStats] = useState<{ total: number; breakdown: Record<string, number> } | null>(null);
@@ -139,6 +139,20 @@ const App: React.FC = () => {
   const speechQueue = useRef<string[]>([]);
   const isSpeaking = useRef<boolean>(false);
   const playbackSpeedRef = useRef<number>(1.1);
+
+  // --- PERSISTENCE EFFECTS ---
+  useEffect(() => {
+      localStorage.setItem('xspace_theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  useEffect(() => {
+      localStorage.setItem('xspace_server_url', serverUrl);
+  }, [serverUrl]);
+
+  useEffect(() => {
+      localStorage.setItem('xspace_admin_url', adminUrl);
+  }, [adminUrl]);
+  // ---------------------------
 
   const theme = isDarkMode ? {
       bg: 'bg-black',
@@ -760,7 +774,7 @@ const App: React.FC = () => {
       {showSettings && (
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
             <RetroWindow title="Admin Console (ROOT)" isDark={isDarkMode} className="w-full max-w-lg" onClose={() => setShowSettings(false)}>
-                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.75 beta</div>
+                 <div className="absolute top-1 right-12 text-xs font-mono opacity-50 text-white">v0.1.7666 beta</div>
                 <div className={`p-6 space-y-6 ${theme.text}`}>
                     
                     {/* BROADCAST CONTROL RESTORED HERE */}
