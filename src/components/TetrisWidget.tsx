@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, RotateCw, ArrowLeft, ArrowRight, ArrowDown, RefreshCw, Trophy, Zap, Bug } from 'lucide-react';
+import { Play, RotateCw, ArrowLeft, ArrowRight, ArrowDown, RefreshCw, Trophy, Zap, Bug, AlertCircle } from 'lucide-react';
 
 interface TetrisWidgetProps {
   isDarkMode: boolean;
@@ -61,6 +61,7 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
   const [leaderboard, setLeaderboard] = useState<ScoreEntry[]>([]);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // FX STATE
   const [bonusMessage, setBonusMessage] = useState<{text: string, sub: string} | null>(null);
@@ -78,12 +79,47 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
 
   const fetchLeaderboard = async () => {
       const baseUrl = getHttpUrl();
-      if (!baseUrl) return;
+      if (!baseUrl) {
+          setFetchError("Missing Server URL");
+          return;
+      }
+      setFetchError(null);
       try {
-          const res = await fetch(`${baseUrl}/scores`);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+          const res = await fetch(`${baseUrl}/scores`, { 
+              signal: controller.signal,
+              headers: { 
+                  'ngrok-skip-browser-warning': 'true' // CRITICAL FIX: Bypass Ngrok warning page
+              }
+          });
+          clearTimeout(timeoutId);
+
+          if (!res.ok) throw new Error("Status " + res.status);
+          
+          // Check if response is JSON (Ngrok might still send HTML if header is ignored)
+          const contentType = res.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) {
+              throw new Error("Received HTML instead of JSON. Check Ngrok URL.");
+          }
+
           const data = await res.json();
-          if (Array.isArray(data)) setLeaderboard(data);
-      } catch (e) { console.error("Leaderboard fetch failed", e); }
+          
+          if (Array.isArray(data)) {
+              // Ensure sorted descending
+              const sorted = data.sort((a: any, b: any) => b.score - a.score);
+              setLeaderboard(sorted);
+          } else {
+              setLeaderboard([]);
+          }
+      } catch (e: any) { 
+          console.error("Leaderboard fetch failed", e);
+          let msg = e.message || "Connection Error";
+          if (msg.includes("<") || msg.includes("Unexpected token")) msg = "Server Error (Bad Response).";
+          else if (msg === "Failed to fetch") msg = "Failed to fetch (Check HTTPS/Mixed Content)";
+          setFetchError(msg);
+      }
   };
 
   const submitScore = async () => {
@@ -93,7 +129,6 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
       setIsSubmitting(true);
       
       // LEVEL 1 SECURITY: Simple Hash
-      // Ideally use a library, but for basic obfuscation:
       const msg = `${nickname}${score}${CLIENT_SECRET}`;
       let hash = 0;
       for (let i = 0; i < msg.length; i++) {
@@ -112,11 +147,13 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
       try {
           await fetch(`${baseUrl}/scores`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                  'Content-Type': 'application/json',
+                  'ngrok-skip-browser-warning': 'true' // CRITICAL FIX
+              },
               body: JSON.stringify(payload)
           });
           await fetchLeaderboard();
-          setShowLeaderboard(true);
       } catch (e) {
           alert("Failed to submit score. Server might be offline.");
       } finally {
@@ -432,7 +469,7 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
                             {gameOver && score > 0 && (
                                 <div className="mb-2 w-full flex gap-1">
                                     <input 
-                                        maxLength={8}
+                                        maxLength={14}
                                         placeholder="YOUR NAME"
                                         className="w-full bg-gray-800 border border-gray-600 px-1 text-sm uppercase"
                                         value={nickname}
@@ -448,14 +485,32 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
                                 </div>
                             )}
 
-                            <div className="flex-1 overflow-y-auto text-xs space-y-1 w-full custom-scrollbar pr-1">
-                                {leaderboard.map((entry, i) => (
-                                    <div key={i} className="flex justify-between border-b border-gray-800 pb-1">
-                                        <span className="text-gray-400">{i+1}. {entry.name.slice(0, 10)}</span>
-                                        <span className="text-yellow-500">{entry.score}</span>
+                            <div className="flex-1 overflow-y-auto text-xs space-y-1 w-full custom-scrollbar pr-1 relative">
+                                {fetchError ? (
+                                    <div className="flex flex-col items-center justify-center h-full text-red-500 gap-2">
+                                        <AlertCircle size={32}/>
+                                        <div className="text-center font-bold">CONNECTION ERROR</div>
+                                        <div className="text-[10px] text-center opacity-80 max-w-[150px] mb-2 leading-tight">
+                                            {fetchError}
+                                        </div>
+                                        <button 
+                                            onClick={fetchLeaderboard}
+                                            className="bg-red-900 text-white px-3 py-1 text-xs border border-red-500 hover:bg-red-800"
+                                        >
+                                            RETRY CONNECTION
+                                        </button>
                                     </div>
-                                ))}
-                                {leaderboard.length === 0 && <div className="text-center opacity-50 mt-4">No records yet</div>}
+                                ) : (
+                                    <>
+                                        {leaderboard.map((entry, i) => (
+                                            <div key={i} className="flex justify-between border-b border-gray-800 pb-1">
+                                                <span className="text-gray-400">{i+1}. {entry.name.slice(0, 10)}</span>
+                                                <span className="text-yellow-500">{entry.score}</span>
+                                            </div>
+                                        ))}
+                                        {leaderboard.length === 0 && <div className="text-center opacity-50 mt-4">No records yet</div>}
+                                    </>
+                                )}
                             </div>
                             
                             <div className="flex gap-2 mt-2 w-full">
