@@ -340,15 +340,23 @@ const TetrisWidget: React.FC<TetrisWidgetProps> = ({ isDarkMode, serverUrl, isGo
       return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, drop, activePiece]);
 
-  // LOOP
+  // FIX: Use a ref for the drop function to prevent interval restarts
+  const dropRef = useRef(drop);
+  useEffect(() => {
+      dropRef.current = drop;
+  }, [drop]);
+
+  // GAME LOOP
   useEffect(() => {
       if (isPlaying && !gameOver) {
-          gameLoopRef.current = setInterval(drop, speed);
+          gameLoopRef.current = setInterval(() => {
+              if (dropRef.current) dropRef.current();
+          }, speed);
       } else {
           if (gameLoopRef.current) clearInterval(gameLoopRef.current);
       }
       return () => { if (gameLoopRef.current) clearInterval(gameLoopRef.current); };
-  }, [isPlaying, gameOver, drop]);
+  }, [isPlaying, gameOver]); // Removed 'drop' dependency to fix stall hack
 
   const startGame = () => {
       setBoard(createEmptyBoard());
