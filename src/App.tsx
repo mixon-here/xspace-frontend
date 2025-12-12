@@ -121,6 +121,11 @@ const App: React.FC = () => {
   const [logoClicks, setLogoClicks] = useState<number>(0);
   const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Secret God Mode (Tetris)
+  const [statusClicks, setStatusClicks] = useState<number>(0);
+  const [isGodMode, setIsGodMode] = useState<boolean>(false);
+  const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Languages
   const [sourceLanguage, setSourceLanguage] = useState<Language>(LANGUAGES.find(l => l.code === 'en') || LANGUAGES[1]); 
   const [targetLanguage, setTargetLanguage] = useState<Language>(LANGUAGES.find(l => l.code === 'ru') || LANGUAGES[0]);
@@ -215,24 +220,35 @@ const App: React.FC = () => {
       }
   }
 
-  // --- SECRET MENU HANDLER ---
+  // --- SECRET MENU HANDLER (DEV AVATAR) ---
   const handleAvatarClick = () => {
     setLogoClicks(prev => {
         const newCount = prev + 1;
-        if (newCount >= 10) { // 10 Clicks to unlock
+        if (newCount >= 10) { // 10 Clicks to unlock Settings
             setShowSettings(true);
             return 0;
         }
         return newCount;
     });
 
-    // Reset counter if idle for 2 seconds
-    if (clickTimeoutRef.current) {
-        clearTimeout(clickTimeoutRef.current);
-    }
-    clickTimeoutRef.current = setTimeout(() => {
-        setLogoClicks(0);
-    }, 2000);
+    if (clickTimeoutRef.current) clearTimeout(clickTimeoutRef.current);
+    clickTimeoutRef.current = setTimeout(() => setLogoClicks(0), 2000);
+  };
+
+  // --- SECRET MENU HANDLER (STATUS LIGHT - GOD MODE) ---
+  const handleStatusClick = () => {
+      setStatusClicks(prev => {
+          const newCount = prev + 1;
+          if (newCount >= 10) {
+              setIsGodMode(!isGodMode);
+              alert(isGodMode ? "GOD MODE DEACTIVATED" : "GOD MODE ACTIVATED");
+              return 0;
+          }
+          return newCount;
+      });
+
+      if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+      statusTimeoutRef.current = setTimeout(() => setStatusClicks(0), 2000);
   };
 
   const getSelectedVoice = (): SpeechSynthesisVoice | null => {
@@ -534,7 +550,11 @@ const App: React.FC = () => {
             {/* Status / Session Info */}
             <fieldset className={`border-2 p-2 pt-1 mt-2 w-full min-w-0 ${isDarkMode ? 'border-green-600' : 'border-t-white border-l-white border-b-black border-r-black'}`}>
                 <legend className={`px-1 ml-2 text-sm ${theme.text}`}>Status</legend>
-                <div className="flex items-center gap-3 mb-2">
+                <div 
+                    className="flex items-center gap-3 mb-2 cursor-pointer select-none active:opacity-50"
+                    onClick={handleStatusClick}
+                    title="System Status"
+                >
                     <div className={`w-4 h-4 shrink-0 border border-black ${connectionState === 'CONNECTED' ? 'bg-[#00ff00] shadow-[0_0_10px_#00ff00]' : 'bg-[#500000]'}`} />
                     <span className={`uppercase tracking-widest ${theme.text}`}>
                         {connectionState === 'CONNECTED' ? 'ONLINE' : 'OFFLINE'}
@@ -640,7 +660,7 @@ const App: React.FC = () => {
 
             {/* TETRIS WIDGET (HIDDEN ON MOBILE, VISIBLE ON DESKTOP) */}
             <div className="hidden md:block">
-                 <TetrisWidget isDarkMode={isDarkMode} />
+                 <TetrisWidget isDarkMode={isDarkMode} serverUrl={serverUrl} isGodMode={isGodMode} />
             </div>
 
              {error && (
