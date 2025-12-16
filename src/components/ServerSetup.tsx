@@ -13,24 +13,28 @@ const ServerSetup: React.FC<ServerSetupProps> = ({ onClose }) => {
     return `#!/bin/bash
 
 # ==========================================
-# XSPACE BROADCAST SERVER (v10.4 - NGROK HEADER FIX)
+# XSPACE BROADCAST SERVER (v11.1 - STARTUP FIX)
 # Features:
-# 1. LOGS: Detailed System Monitor
-# 2. GAME: SQLite Leaderboard
-# 3. CONNECT: Shows Public HTTPS URL automatically
+# 1. FIX: start.sh variable expansion bug
+# 2. SERVICE: Runs in TMUX (Survives SSH disconnect)
+# 3. LOGS: Re-attachable console output
 # ==========================================
 
 echo -e "\\e[1;35m>>> STARTING INSTALLATION...\\e[0m"
 
-# 1. KILL PROCESSES
+# 1. KILL PROCESSES (Clean slate)
 pkill -f ngrok
 pkill -f xspace.py
-pkill -f "bash start.sh"
+# Kill old tmux session if exists to update code
+tmux kill-session -t xspace_service 2>/dev/null
+# Force kill port 8000
+fuser -k 8000/tcp > /dev/null 2>&1
 
 # 2. SYSTEM DEPENDENCIES
 echo "Updating system..."
 sudo apt-get update -qq
-sudo apt-get install -y ffmpeg curl unzip build-essential sqlite3 jq -qq
+# Added 'tmux' for background persistence and 'psmisc' for fuser
+sudo apt-get install -y ffmpeg curl unzip build-essential sqlite3 jq psmisc tmux -qq
 
 # 3. NGROK
 if ! command -v ngrok &> /dev/null; then
@@ -92,6 +96,7 @@ from pydantic import BaseModel
 from groq import AsyncGroq, RateLimitError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import yt_dlp
 import uvicorn
 
@@ -309,7 +314,8 @@ class AudioStreamProcessor:
         self.is_running = False
         self.current_url = None
         self.current_title = ""
-        self.audio_queue = asyncio.Queue()
+        # FIXED: Limit queue size to prevent RAM overflow (backpressure)
+        self.audio_queue = asyncio.Queue(maxsize=500)
         self.ffmpeg_process = None
         self.processing_task = None
         self.watchdog_task = None
@@ -349,7 +355,7 @@ class AudioStreamProcessor:
         if self.watchdog_task:
             self.watchdog_task.cancel()
             self.watchdog_task = None
-        self.audio_queue = asyncio.Queue() 
+        self.audio_queue = asyncio.Queue(maxsize=500) 
         self.current_url = None
         self.current_title = ""
         await manager.broadcast_meta("")
@@ -398,7 +404,7 @@ class AudioStreamProcessor:
             while self.is_running:
                 chunk = await self.ffmpeg_process.stdout.read(4096)
                 if not chunk: break
-                await self.audio_queue.put(chunk)
+                await self.audio_queue.put(chunk) # Will block if queue is full
                 self.last_activity_time = time.time()
         except Exception as e:
             if self.is_running: logger.error(f"FFmpeg error: {e}")
@@ -530,17 +536,24 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket, client_ip)
         await manager.broadcast_stats()
 
+@app.get("/")
+def root():
+    return JSONResponse(content={"status": "XSpace Server is ONLINE", "version": "10.6"})
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 EOF
 
-# 9. START SCRIPT
-cat <<EOF > start.sh
+# 9. RUNNER SCRIPT (Actual Logic)
+cat <<EOF > runner.sh
 #!/bin/bash
 pkill -f ngrok
 pkill -f xspace.py
 source \$HOME/miniconda3/etc/profile.d/conda.sh
 conda activate xspace
+
+# Force clean port
+fuser -k 8000/tcp > /dev/null 2>&1
 
 if [ -n "\$NGROK_DOMAIN" ]; then
     ngrok http --domain=\$NGROK_DOMAIN 8000 > /dev/null &
@@ -552,10 +565,9 @@ sleep 5
 echo ""
 echo "--------------------------------------------------------"
 echo "🔎 CHECKING NGROK TUNNEL..."
-echo "   (Wait 5 seconds for tunnel to establish)"
 echo "--------------------------------------------------------"
 echo ""
-echo "Use this URL in the app settings (replace wss:// or http:// with this):"
+echo "Use this URL in the app settings:"
 echo ""
 echo -e "\\e[1;32m"
 curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url' | sed 's/https:\/\//wss:\/\//'
@@ -564,11 +576,47 @@ echo ""
 echo "--------------------------------------------------------"
 
 while true; do
-  echo 'Starting XSpace Server...'
+  echo 'Starting XSpace Server (Inside TMUX)...'
+  # Force clean port again just in case
+  fuser -k 8000/tcp > /dev/null 2>&1
   python xspace.py
-  echo '⚠️ Server stopped! Restarting in 3 seconds... (Press Ctrl+C to stop)'
+  echo '⚠️ Server stopped! Restarting in 3 seconds...'
   sleep 3
 done
+EOF
+
+chmod +x runner.sh
+
+# 10. START WRAPPER (Tmux Logic)
+# FIX: Using quoted 'EOF' to prevent variable expansion during creation. 
+# This ensures \$SESSION is written literally to start.sh instead of being expanded to empty string by the installer shell.
+cat <<'EOF' > start.sh
+#!/bin/bash
+
+# Define Session Name
+SESSION="xspace_service"
+
+# Check if session exists
+tmux has-session -t $SESSION 2>/dev/null
+
+if [ $? != 0 ]; then
+  # Create new session in background, running runner.sh
+  echo "Creating new persistent server session..."
+  tmux new-session -d -s $SESSION "bash runner.sh"
+else
+  echo "Attaching to existing server session..."
+fi
+
+# Attach to session (This gives the 'exact log' experience)
+tmux attach -t $SESSION
+
+# When user detaches (Ctrl+B, D), they exit here.
+echo ""
+echo "---------------------------------------------------"
+echo "You have detached from the server console."
+echo "The server is STILL RUNNING in the background."
+echo "To view logs again, run: ./start.sh"
+echo "---------------------------------------------------"
 EOF
 
 chmod +x start.sh
